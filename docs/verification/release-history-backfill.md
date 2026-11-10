@@ -93,3 +93,19 @@ documentation/package recovery does not establish Cafe deployment, human
 audio/visual acceptance, physical timing/output behavior, GPU long playback,
 native Apple media completeness or soak acceptance. Known failures and later
 fixes are retained in each version's **Bugs and problems in this build** section.
+
+## 🎨 Release presentation restoration
+
+The backfill removed the original 🌱/🎬 release identities and ✨/🛠️ section
+decoration. Those have been restored, with the same presentation applied to all
+nine newer alpha releases, their changelog entries and chronological index.
+Each release retains its tagged entries, known problems, PR/issue references,
+immutable screenshots and source scope. Downloadable notes and their checksum
+entries are synchronized with the published bodies.
+
+The [release-note template](../releases/TEMPLATE.md) carries the decorated
+sections forward. `check-release-history.mjs` checks each milestone emoji and
+the decorated headings alongside the existing ancestry, image and package
+checks. Release automation takes the public title from the curated heading,
+preserving its emoji and milestone name instead of replacing it with plain text.
+Native packages, historical tags and publication dates are preserved.
