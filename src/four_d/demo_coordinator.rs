@@ -1,4 +1,4 @@
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::thread;
@@ -20,7 +20,7 @@ pub struct DemoCoordinatorSession {
     pub virtual_board: VirtualBoardSession,
     pub supervisor: CoordinatorSupervisor,
     pub client: ControllerClient,
-    pub temp_root: PathBuf,
+    _temp_root: DemoDataRoot,
 }
 
 pub fn resolve_controller_binary() -> Option<PathBuf> {
@@ -83,20 +83,51 @@ pub fn resolve_controller_binary() -> Option<PathBuf> {
     None
 }
 
+struct DemoDataRoot(PathBuf);
+
+impl Drop for DemoDataRoot {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 impl DemoCoordinatorSession {
     pub fn start() -> Result<Self, String> {
         crate::four_d::demo_cleanup::cleanup_stale_demo_resources();
 
         let vb = VirtualBoardSession::spawn()?;
+        vb.send_command("door closed")
+            .map_err(|error| format!("initialize virtual enclosure: {error}"))?;
 
         let run_id = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
         let temp_root = std::env::temp_dir().join(format!("pealayer-demo-coordinator-{}-{run_id}", std::process::id()));
-        std::fs::create_dir_all(&temp_root).map_err(|e| format!("create demo coordinator temp root: {e}"))?;
+        std::fs::create_dir(&temp_root).map_err(|e| format!("create demo coordinator temp root: {e}"))?;
+        let temp_root = DemoDataRoot(temp_root);
 
-        let (supervisor, address) = if let Some(binary) = resolve_controller_binary() {
+        let (supervisor, client) = if let Some(binary) = resolve_controller_binary() {
+            let config_path = temp_root.0.join("config.json");
+            // The host's discovery defaults apply even to a loopback IPC listener.
+            // A demonstration should neither announce itself nor open LAN sockets.
+            let config = json!({
+                "integrations": {
+                    "discovery": {
+                        "mndp_enabled": false,
+                        "mdns_enabled": false,
+                        "dns_sd_enabled": false,
+                        "ssdp_enabled": false,
+                        "upnp_enabled": false,
+                        "ws_discovery_enabled": false,
+                        "broadcast_enabled": false,
+                        "netbios_enabled": false
+                    },
+                    "local_device": { "enabled": false }
+                }
+            });
+            std::fs::write(&config_path, config.to_string())
+                .map_err(|error| format!("write isolated demo controller configuration: {error}"))?;
             let mut last_err = String::new();
             let mut started = None;
 
@@ -127,8 +158,8 @@ impl DemoCoordinatorSession {
                     &format!("127.0.0.1:{coordinator_port}"),
                     "--no-connect",
                 ])
-                .env("PCCONTROLLER_DATA_DIR", &temp_root)
-                .env("PCCONTROLLER_CONFIG_DIR", &temp_root)
+                .env("PCCONTROLLER_DATA_DIR", temp_root.0.join("data"))
+                .env("PCCONTROLLER_CONFIG", &config_path)
                 .stdout(Stdio::null())
                 .stderr(Stdio::null());
 
@@ -141,30 +172,40 @@ impl DemoCoordinatorSession {
                     }
                 };
 
-                let deadline = Instant::now() + Duration::from_secs(4);
-                let mut ready = false;
+                let address = format!("127.0.0.1:{coordinator_port}");
+                let expected_host = format!("ipc:{}", child.id());
+                let deadline = Instant::now() + Duration::from_secs(8);
                 while Instant::now() < deadline {
-                    if TcpStream::connect(("127.0.0.1", coordinator_port)).is_ok() {
-                        ready = true;
-                        break;
-                    }
                     if let Ok(Some(status)) = child.try_wait() {
                         last_err = format!("PCController coordinator exited prematurely with status: {status}");
                         break;
                     }
-                    thread::sleep(Duration::from_millis(20));
+                    match ControllerClient::connect(&address) {
+                        Ok(mut client) => match client.call("controller.snapshot", json!({})) {
+                            Ok(snapshot) if snapshot["host_instance_id"].as_str() == Some(expected_host.as_str()) => {
+                                started = Some(client);
+                                break;
+                            }
+                            Ok(_) => {
+                                last_err = format!("another coordinator owns {address}");
+                                break;
+                            }
+                            Err(error) => last_err = error,
+                        },
+                        Err(error) => last_err = error,
+                    }
+                    thread::sleep(Duration::from_millis(50));
                 }
 
-                if ready {
-                    started = Some((CoordinatorSupervisor::Process(child), format!("127.0.0.1:{coordinator_port}")));
-                    break;
+                if let Some(client) = started.take() {
+                    return Self::attach(vb, CoordinatorSupervisor::Process(child), client, temp_root);
                 }
 
                 drop(child);
                 thread::sleep(Duration::from_millis(50 * attempt as u64));
             }
 
-            started.ok_or_else(|| format!("PCController coordinator did not start after 3 attempts: {last_err}"))?
+            return Err(format!("PCController coordinator did not start after 3 attempts: {last_err}"));
         } else {
             let candidates = library_candidates();
             if candidates.is_empty() {
@@ -172,7 +213,7 @@ impl DemoCoordinatorSession {
             }
 
             let options = EmbeddedHostOptions {
-                data_root: temp_root.clone(),
+                data_root: temp_root.0.clone(),
                 app_id: "pealayer.demo".into(),
                 app_name: "Pealayer Demo".into(),
                 disable_auto_connect: true,
@@ -208,12 +249,19 @@ impl DemoCoordinatorSession {
                 .ok_or_else(|| "demo coordinator exposed no valid listening address".to_string())?
                 .to_owned();
 
-            (CoordinatorSupervisor::Host(host), address)
+            let client = ControllerClient::connect(&address)
+                .map_err(|error| format!("connect to demo coordinator at {address}: {error}"))?;
+            (CoordinatorSupervisor::Host(host), client)
         };
+        Self::attach(vb, supervisor, client, temp_root)
+    }
 
-        let mut client = ControllerClient::connect(&address)
-            .map_err(|e| format!("connect to demo coordinator at {address}: {e}"))?;
-
+    fn attach(
+        vb: VirtualBoardSession,
+        supervisor: CoordinatorSupervisor,
+        mut client: ControllerClient,
+        temp_root: DemoDataRoot,
+    ) -> Result<Self, String> {
         let connected = client.call("controller.connect", json!({"port": format!("tcp://127.0.0.1:{}", vb.port)}))
             .map_err(|e| format!("attach demo coordinator to virtual board: {e}"))?;
         if connected.get("connected").and_then(|v| v.as_bool()) != Some(true) {
@@ -231,19 +279,20 @@ impl DemoCoordinatorSession {
         }
 
         let profile = client.call("controller.board_profile.get", json!({}))
-            .unwrap_or_else(|_| json!({"revision": 0}));
-        let revision = profile.get("revision").cloned().unwrap_or(json!(0));
-        let _ = client.call("controller.board_profile.update", json!({
+            .map_err(|error| format!("read demo board profile: {error}"))?;
+        let revision = profile.get("revision")
+            .ok_or("demo board profile did not advertise a revision")?;
+        client.call("controller.board_profile.update", json!({
             "key": "demo",
             "mode": "cinema-seat-motion",
             "expected_revision": revision,
-        }));
+        })).map_err(|error| format!("configure demo board profile: {error}"))?;
 
         Ok(Self {
             virtual_board: vb,
             supervisor,
             client,
-            temp_root,
+            _temp_root: temp_root,
         })
     }
 }
@@ -259,6 +308,5 @@ impl Drop for DemoCoordinatorSession {
                 let _ = host.shutdown();
             }
         }
-        let _ = std::fs::remove_dir_all(&self.temp_root);
     }
 }

@@ -385,7 +385,7 @@ pub fn draw_simulation_controls(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 .on_hover_text(app.tr("Toggle virtual enclosure door switch"))
                 .clicked()
             {
-                let _ = app.send_virtual_board_command("door toggle");
+                let _ = app.send_virtual_board_command(if door_open { "door closed" } else { "door open" });
             }
 
             ui.add_space(8.0);
@@ -404,7 +404,9 @@ pub fn draw_simulation_controls(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     .on_hover_text(key_tip)
                     .clicked()
                 {
-                    let _ = app.send_virtual_board_command(&format!("key {key} click"));
+                    if let Err(error) = app.press_front_panel_key(&key_label) {
+                        app.set_osd(error);
+                    }
                 }
             }
 
@@ -424,7 +426,7 @@ pub fn draw_simulation_controls(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 .on_hover_text(app.tr("Simulate 24-bit RF remote key packet"))
                 .clicked()
             {
-                let _ = app.send_virtual_board_command("rfrecv 0x4D2A 24 1 350");
+                let _ = app.send_virtual_board_command("rf 0x4D2A 24 1 350");
             }
         });
     });
@@ -642,20 +644,20 @@ mod tests {
         // 3. Verify send_virtual_board_command dispatches to engine handle
         let (tx, rx) = std::sync::mpsc::channel();
         app.engine_handle.sender = tx;
-        assert!(app.send_virtual_board_command("door toggle").is_ok());
-        assert!(app.send_virtual_board_command("key 1 click").is_ok());
+        assert!(app.send_virtual_board_command("door closed").is_ok());
+        assert!(app.send_virtual_board_command("rf 0x4D2A 24 1 350").is_ok());
 
         match rx.try_recv() {
             Ok(crate::four_d::engine::EngineMessage::VirtualBoardCommand(cmd)) => {
-                assert_eq!(cmd, "door toggle");
+                assert_eq!(cmd, "door closed");
             }
-            _ => panic!("Expected VirtualBoardCommand('door toggle')"),
+            _ => panic!("Expected VirtualBoardCommand('door closed')"),
         }
         match rx.try_recv() {
             Ok(crate::four_d::engine::EngineMessage::VirtualBoardCommand(cmd)) => {
-                assert_eq!(cmd, "key 1 click");
+                assert_eq!(cmd, "rf 0x4D2A 24 1 350");
             }
-            _ => panic!("Expected VirtualBoardCommand('key 1 click')"),
+            _ => panic!("Expected VirtualBoardCommand('rf 0x4D2A 24 1 350')"),
         }
 
         // 4. Verify tick_virtual_board_kinematics advances strokes

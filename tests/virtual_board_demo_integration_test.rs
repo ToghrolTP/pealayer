@@ -26,7 +26,10 @@ fn test_virtual_board_demo_full_lifecycle() {
     assert!(caps.board_connected, "virtual board must report connected");
     assert!(caps.supports_segment_display, "must support segment display");
     assert!(caps.supports_addressable_led, "must support addressable LED");
-    assert!(caps.controls.iter().any(|c| c.key == "seat.a"), "cinema seat motion profile must be provisioned");
+    for key in ["seat.a", "seat.b", "relay.5", "pwm.0"] {
+        assert!(caps.controls.iter().any(|control| control.key == key), "missing showcase control {key}");
+    }
+    assert_eq!(caps.telemetry.door_open, Some(false), "showcase must start with its virtual door closed");
 
     // 3. Verify showcase timeline loads valid cues
     let timeline = build_demo_showcase_timeline();
@@ -34,7 +37,7 @@ fn test_virtual_board_demo_full_lifecycle() {
     assert!(!timeline.analog_tracks.is_empty(), "showcase timeline must have analog curves");
 
     // 4. Test cue execution through coordinator
-    let relay_res = session.client.call("controller.command.execute", serde_json::json!({"command": "relay 1 on"}));
+    let relay_res = session.client.call("controller.command.execute", serde_json::json!({"command": "relay 5 on"}));
     assert!(relay_res.is_ok(), "relay command execution must succeed");
 
     let pwm_res = session.client.call("controller.pwm.set", serde_json::json!({"channel": 0, "raw_value": 2048}));
