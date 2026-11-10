@@ -1,3 +1,4 @@
+use crate::ui::palette::native::controls::CheckboxUiExt;
 use crate::app::PealayerApp;
 use crate::ui::dropdown::DropdownUiExt;
 use eframe::egui;
@@ -659,7 +660,7 @@ fn draw_saved_assignments(app: &mut PealayerApp, ui: &mut egui::Ui, catalog: &Va
                         egui::Frame::group(ui.style()).show(ui, |ui| {
                             ui.horizontal(|ui| {
                                 let mut enabled = binding["enabled"].as_bool().unwrap_or(false);
-                                if ui.add_enabled(live_connected && !app.rf.pending, egui::Checkbox::new(&mut enabled, "")).changed() {
+                                if ui.add_enabled(live_connected && !app.rf.pending, crate::ui::palette::native::controls::Checkbox::new(&mut enabled, "")).changed() {
                                     let mut updated = binding.clone(); updated["enabled"] = json!(enabled);
                                     request(app, "binding.put", json!({"binding":updated,"previous_name":binding["name"]}));
                                 }
@@ -1084,7 +1085,7 @@ fn action_editor(ui: &mut egui::Ui, action: &mut Value, catalog: &Value) {
                     ui.end_row();
                     ui.label("Launch");
                     let mut detached = action["detached"].as_bool().unwrap_or(false);
-                    if ui.checkbox(&mut detached, "Launch independently").changed() {
+                    if ui.themed_checkbox(&mut detached, "Launch independently").changed() {
                         action["detached"] = json!(detached);
                     }
                     ui.end_row();
@@ -1194,7 +1195,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             choices(ui,"Gesture",&mut app.rf.draft["match"],"gesture",&options(&catalog["gestures"]));
                             number(ui,"Cooldown (ms)",&mut app.rf.draft,"cooldown_ms",1,3_600_000);
                         });
-                        let caption=app.tr("Enter signal manually (advanced)");ui.checkbox(&mut app.rf.manual_signal,caption);
+                        let caption=app.tr("Enter signal manually (advanced)");ui.themed_checkbox(&mut app.rf.manual_signal,caption);
                         if app.rf.manual_signal { egui::Grid::new("rf_manual_signal").num_columns(2).show(ui,|ui| {
                             for (label,field,min,max) in [("Code","rf_code",1,u32::MAX as u64),("Bits","rf_bits",1,32),("Protocol","rf_protocol",1,12)] { number(ui,label,&mut app.rf.draft["match"],field,min,max); }
                         }); }
@@ -1212,7 +1213,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             if actions.len()<8 && ui.button(format!("{} {}",crate::ui::icons::PLUS,rf_tr(ui,"Add action"))).clicked() { actions.push(json!({"type":"control","action_id":""})); }
                         }
                         if array(&app.rf.draft["actions"]).iter().any(|a|a["type"]=="virtual-key") {
-                            ui.checkbox(&mut app.rf.allow_keyboard,format!("Allow assigned keyboard keys on {}",catalog["hostname"].as_str().unwrap_or("controller host")));
+                            ui.themed_checkbox(&mut app.rf.allow_keyboard,format!("Allow assigned keyboard keys on {}",catalog["hostname"].as_str().unwrap_or("controller host")));
                         }
                         if array(&catalog["entries"]).iter().any(|entry| signal_matches(&app.rf.draft,entry) && entry["action_kind"].as_u64().unwrap_or(0)>0) {
                             ui.colored_label(ui.visuals().warn_fg_color,app.tr("This button also has a board action. Unassign it in Remotes to replace it."));
@@ -1329,9 +1330,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         let mut seconds=draft["timeout_seconds"].as_u64().unwrap_or(60);
                         let mut continuous=draft["continuous"].as_bool().unwrap_or(false);
                         ui.add_enabled_ui(!app.rf.pending,|ui| {
-                            ui.checkbox(&mut timed,&labels[0]);
+                            ui.themed_checkbox(&mut timed,&labels[0]);
                             ui.horizontal(|ui| {ui.label(&labels[1]);ui.add(egui::DragValue::new(&mut seconds).range(1..=120).suffix(" s"));});
-                            ui.checkbox(&mut continuous,&labels[2]);
+                            ui.themed_checkbox(&mut continuous,&labels[2]);
                         });
                         *draft=json!({"timed":timed,"timeout_seconds":seconds,"continuous":continuous});
                         if ui.add_enabled(!app.rf.pending && live_connected && catalog["preferences"].is_object() && *draft!=catalog["preferences"],egui::Button::new(&labels[3])).clicked() {

@@ -1,4 +1,5 @@
 //! Application-owned rail actions. Dragging is a preview, never an activation.
+use crate::ui::palette::native::controls::CheckboxUiExt;
 use super::{icons, layout::PealayerTab as Tab, sidebar_rail::SidebarPane as Pane};
 use crate::app::PealayerApp;
 use eframe::egui::{self, Id, Rect};
@@ -208,7 +209,7 @@ fn common_menu(app: &mut PealayerApp, ui: &mut egui::Ui) {
             for action in app.sidebar_shortcuts.order().into_iter().filter(|action| action.included()) {
                 let mut visible = !app.sidebar_shortcuts.hidden.contains(&action);
                 if ui
-                    .checkbox(
+                    .themed_checkbox(
                         &mut visible,
                         format!("{}  {}", action.icon(), app.tr(action.label())),
                     )

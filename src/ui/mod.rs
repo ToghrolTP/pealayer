@@ -277,6 +277,7 @@ pub fn configure_native_visuals(ctx: &eframe::egui::Context, config: &crate::con
 
     ctx.set_visuals_of(Theme::Dark, dark);
     ctx.set_visuals_of(Theme::Light, light);
+    palette::native::controls::configure(ctx, config.color_palette == crate::config::ColorPalette::Pastel);
     ctx.all_styles_mut(configure_interaction_style);
     ctx.all_styles_mut(|style| control_density::configure(style, config.ui_control_density));
     craft_theme::set_themes(ctx, tokens_dark, tokens_light);

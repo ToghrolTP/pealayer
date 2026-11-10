@@ -22,6 +22,7 @@ pub fn install(ctx: &egui::Context) {
         "pastel" => "pastel",
         _ => "native",
     };
+    palette::controls::configure(ctx, name == "pastel");
     let theme_override = std::env::var("APP_THEME").unwrap_or_default();
     let theme = match theme_override.trim().to_ascii_lowercase().as_str() {
         "light" => "light",

@@ -4,9 +4,22 @@
 
 In desktop or Web **Preferences → Appearance → Interface → Color palette**, choose **Neutral (default)** for the original gray palette, **Studio** for blue-gray surfaces, or **Pastel** for slate and lavender surfaces with lilac-to-rose gradients. Theme mode and accent remain independent settings.
 
-## Pastel previews
+## Raised Pastel controls
 
-Pastel uses dark indigo surfaces and cool lavender in light mode. The native menu bar and Web header share an indigo-to-plum gradient above the lilac-to-rose divider. The Web player has an ambient gradient and more visible slider tracks. Hover and press colors distinguish control states without changing their bounds. Media strips and the cyan, mint, and rose chart colors carry forward from the original palette.
+Pastel uses its original slate and lavender surfaces. Framed buttons and checkboxes have solid faces, a light edge and a short shadow. Pressing a control reduces its shadow without changing the hit target. Checked boxes use the current accent and a contrasting checkmark. The header uses a solid surface, with the original accent divider below it.
+
+| Surface | Before | Raised controls |
+| --- | --- | --- |
+| Windows Open Location | [Before](../screenshots/pastel-controls-native-before.png) | [After](../screenshots/pastel-controls-native-after.png) |
+| Web Download Center | [Before](../screenshots/pastel-controls-web-before.png) | [After](../screenshots/pastel-controls-web-after.png) |
+
+The Windows comparison uses a disconnected review instance at 150% scale. The before capture uses the clean `769b995` build. The after capture uses the local release build of the native changes committed as `e66d2e7`. Its manifest records `ac0aa5a` with pending changes because compilation began before that commit. Chromium ran the actual `ac0aa5a` and `c1e1a35` Web bundles at 1200 × 720 with a synthetic URL and an empty queue. The browser verified that the checkbox and button kept their bounds and that the checkbox switched between raised and inset shadows.
+
+The native paint and pointer test covers light, dark, right-to-left layout, and switching back to the default control style. The shared Download Center tests, Web appearance tests, TypeScript check, and Web application parity guardrails passed.
+
+## Earlier Pastel previews
+
+The earlier pass deepened Pastel's surfaces and added the indigo-to-plum header gradient. The media strips and chart colors in those captures were already part of Pastel.
 
 | Surface | Before | After |
 | --- | --- | --- |

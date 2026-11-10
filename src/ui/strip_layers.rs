@@ -1,4 +1,5 @@
 //! Segmented strip authoring. Every interaction changes a draft, never hardware.
+use crate::ui::palette::native::controls::CheckboxUiExt;
 use super::{effects_library::designer_tr as tr, icons};
 use crate::{
     app::ControllerEffectDraft,
@@ -347,7 +348,7 @@ pub(crate) fn draw(ui: &mut egui::Ui, draft: &mut ControllerEffectDraft) {
     });
     let l = &mut p.layers[layer];
     ui.horizontal(|ui| {
-        ui.checkbox(&mut l.enabled, tr(ui, "Enabled"));
+        ui.themed_checkbox(&mut l.enabled, tr(ui, "Enabled"));
         ui.add(
             super::dialog::singleline_text_edit(ui, &mut l.name)
                 .desired_width(ui.available_width()),
@@ -430,7 +431,7 @@ pub(crate) fn draw(ui: &mut egui::Ui, draft: &mut ControllerEffectDraft) {
                 ui.end_row();
             }
             ui.label(tr(ui, "Reverse"));
-            ui.checkbox(&mut l.reverse, "");
+            ui.themed_checkbox(&mut l.reverse, "");
             ui.end_row();
         });
     if let Err(error) = p.validate(count) {

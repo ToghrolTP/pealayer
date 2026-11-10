@@ -1,4 +1,5 @@
 //! Simple player chrome, bounded placement and GPU-only video backdrop.
+use crate::ui::palette::native::controls::CheckboxUiExt;
 use crate::{app::PealayerApp, config::ControlBackdrop};
 use eframe::egui::{self, Color32, Pos2, Rect, Shape, Vec2};
 
@@ -64,12 +65,12 @@ pub fn normalized(bounds: Rect, size: Vec2, pos: Pos2) -> [f32; 2] {
 pub fn menu(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let before = app.simple_workspace;
     ui.label(egui::RichText::new(app.tr("Simple workspace")).weak());
-    ui.checkbox(&mut app.simple_workspace.show_menu_bar, "Show menu bar");
-    ui.checkbox(
+    ui.themed_checkbox(&mut app.simple_workspace.show_menu_bar, "Show menu bar");
+    ui.themed_checkbox(
         &mut app.simple_workspace.show_toolbar,
         "Show command toolbar",
     );
-    ui.checkbox(&mut app.simple_workspace.show_status_bar, "Show status bar");
+    ui.themed_checkbox(&mut app.simple_workspace.show_status_bar, "Show status bar");
     ui.separator();
     if ui
         .button(format!(

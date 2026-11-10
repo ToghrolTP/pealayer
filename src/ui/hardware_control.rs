@@ -1,3 +1,4 @@
+use crate::ui::palette::native::controls::CheckboxUiExt;
 use crate::ui::dropdown::DropdownUiExt;
 use crate::app::PealayerApp;
 use crate::four_d::controller::{HardwareAction, HardwareCapabilities, HardwareControl};
@@ -1284,7 +1285,7 @@ fn draw_channel_manager_page(
                     |ui| {
                         let mut checked = selected.contains(&control.key);
                         if ui
-                            .checkbox(&mut checked, "")
+                            .themed_checkbox(&mut checked, "")
                             .on_hover_text(app.tr("Select for bulk actions"))
                             .changed()
                         {
@@ -2112,8 +2113,8 @@ fn draw_hardware_binding_dialog(
                     crate::ui::icons::GLOBE,
                     &app.tr("Availability"),
                     |ui| {
-                        ui.checkbox(&mut binding.enabled, app.tr("Binding enabled"));
-                        ui.add_enabled_ui(binding.then.is_empty(), |ui| ui.checkbox(
+                        ui.themed_checkbox(&mut binding.enabled, app.tr("Binding enabled"));
+                        ui.add_enabled_ui(binding.then.is_empty(), |ui| ui.themed_checkbox(
                             &mut binding.global,
                             format!(
                                 "{} ({})",
@@ -2226,7 +2227,7 @@ fn draw_hardware_binding_dialog(
                                 ui.set_width(ui.available_width());
                                 ui.horizontal(|ui| {
                                     let mut enabled = binding.enabled;
-                                    if ui.checkbox(&mut enabled, "").changed() {
+                                    if ui.themed_checkbox(&mut enabled, "").changed() {
                                         toggle_binding = Some((binding.id.clone(), enabled));
                                     }
                                     ui.label(
@@ -2355,7 +2356,7 @@ fn channel_option_toggle(
                         ui.label(egui::RichText::new(detail).small().weak());
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.checkbox(value, "")
+                        ui.themed_checkbox(value, "")
                     })
                     .inner
                 })
@@ -3245,7 +3246,7 @@ mod tests {
                         let layer_id = ui.layer_id();
                         let row = manager_channel_row(ui, "relay.5", layer_id, true, 0.58, |ui| {
                             let mut selected = true;
-                            let checkbox = ui.checkbox(&mut selected, "").rect;
+                            let checkbox = ui.themed_checkbox(&mut selected, "").rect;
                             let remaining = ui.available_width();
                             ui.allocate_exact_size(
                                 egui::vec2(remaining - 36.0, 27.0),
@@ -3444,7 +3445,7 @@ mod tests {
                     ui.set_width(520.0);
                     let layer = ui.layer_id();
                     let row = manager_channel_row(ui, "relay.5", layer, selected, 1.0, |ui| {
-                        checkbox_rect = ui.checkbox(&mut selected, "").rect;
+                        checkbox_rect = ui.themed_checkbox(&mut selected, "").rect;
                         let start = ui.next_widget_position();
                         name_rect = egui::Rect::from_min_size(
                             start,

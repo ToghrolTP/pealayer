@@ -1,5 +1,6 @@
 //! Fixed-geometry, panel-owned controls. Drag state is deliberately distinct
 //! from hardware cards and cues; persistence never runs inside DockArea.
+use crate::ui::palette::native::controls::CheckboxUiExt;
 use crate::app::PealayerApp;
 use crate::config::TimelineToolbarAction as Action;
 use eframe::egui::{self, Align2, Color32, FontId, Id, Rect, Response, Stroke, StrokeKind};
@@ -335,7 +336,7 @@ pub(super) fn customization(
     for (index, action) in order.clone().into_iter().enumerate() {
         ui.push_id(action, |ui| ui.horizontal(|ui| {
             let mut visible = !hidden.contains(&action);
-            if ui.checkbox(&mut visible, egui::RichText::new(format!("{}  {}",
+            if ui.themed_checkbox(&mut visible, egui::RichText::new(format!("{}  {}",
                 super::layout::timeline_toolbar_action_icon(action),
                 tr(super::layout::timeline_toolbar_action_label(action)))).size(12.0)).changed() {
                 hidden.retain(|candidate| *candidate != action);

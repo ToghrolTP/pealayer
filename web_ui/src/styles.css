@@ -122,19 +122,40 @@ body {
   border-bottom: 1px solid var(--line);
 }
 :root[data-palette="pastel"] .studio-header {
-  background: linear-gradient(105deg, var(--chrome-start), var(--chrome-end)) !important;
   border-image: linear-gradient(90deg, var(--gradient-start), var(--gradient-end)) 1;
 }
-:root[data-palette="pastel"] .studio-brand__mark {
-  background: linear-gradient(135deg,
-    color-mix(in srgb, var(--gradient-start) 34%, var(--surface-2)),
-    color-mix(in srgb, var(--gradient-end) 34%, var(--surface-2)));
+
+:root[data-palette="pastel"] {
+  --control-shadow-color: color-mix(in srgb, var(--canvas) 72%, black);
+  --control-depth: inset 0 1px color-mix(in srgb, var(--text) 14%, transparent),
+    0 2px 3px color-mix(in srgb, var(--control-shadow-color) 65%, transparent);
+  --control-pressed: inset 0 1px 2px color-mix(in srgb, var(--control-shadow-color) 40%, transparent);
 }
-:root[data-palette="pastel"] .app-content {
-  background:
-    radial-gradient(ellipse at 12% 0%, var(--chrome-start), transparent 62%),
-    radial-gradient(ellipse at 88% 0%, var(--chrome-end), transparent 57%),
-    var(--canvas);
+:root[data-palette="pastel"][data-theme="light"] {
+  --control-shadow-color: color-mix(in srgb, var(--text) 36%, transparent);
+}
+:root[data-palette="pastel"] :is(.ant-btn-default, .ant-btn-primary):not(:disabled, .ant-btn-disabled),
+:root[data-palette="pastel"] .ant-checkbox:not(.ant-checkbox-disabled) {
+  box-shadow: var(--control-depth);
+}
+:root[data-palette="pastel"] :is(.ant-btn-default, .ant-btn-primary):not(:disabled, .ant-btn-disabled):active,
+:root[data-palette="pastel"] .ant-checkbox-wrapper:active .ant-checkbox:not(.ant-checkbox-disabled) {
+  box-shadow: var(--control-pressed);
+}
+:root[data-palette="pastel"] .ant-checkbox:not(.ant-checkbox-disabled, .ant-checkbox-checked, .ant-checkbox-indeterminate) {
+  background-color: var(--surface-2);
+  border-color: var(--line-strong);
+}
+:root[data-palette="pastel"] .ant-checkbox-wrapper:hover .ant-checkbox:not(.ant-checkbox-disabled, .ant-checkbox-checked, .ant-checkbox-indeterminate) {
+  background-color: var(--surface-3);
+  border-color: var(--hover-line);
+}
+:root[data-palette="pastel"] .ant-checkbox-checked:not(.ant-checkbox-disabled)::after {
+  border-color: var(--accent-text);
+}
+:root[data-palette="pastel"] .ant-checkbox:has(.ant-checkbox-input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 .studio-header__leading {
   height: 100%;
@@ -1042,10 +1063,6 @@ html[data-motion="disabled"] *, html[data-motion="disabled"] *::before, html[dat
   border-radius: 12px;
   box-shadow: var(--shadow);
 }
-:root[data-palette="pastel"] .remote-player {
-  background: linear-gradient(130deg, var(--surface-1) 64%, var(--chrome-end));
-  border-color: var(--line-strong);
-}
 :root[data-palette="pastel"] .remote-player .ant-btn-default:not(.transport-action, :disabled):hover {
   background: var(--surface-3);
   border-color: var(--hover-line);
@@ -1058,12 +1075,6 @@ html[data-motion="disabled"] *, html[data-motion="disabled"] *::before, html[dat
 }
 :root[data-palette="pastel"] .remote-player .ant-slider:not(.ant-slider-disabled) .ant-slider-rail {
   background: var(--line);
-}
-:root[data-palette="pastel"] .remote-player .ant-slider:not(.ant-slider-disabled) .ant-slider-track {
-  background: linear-gradient(to right, color-mix(in srgb, var(--accent) 65%, var(--blue)), var(--accent));
-}
-:root[data-palette="pastel"] .remote-player .ant-slider-rtl:not(.ant-slider-disabled) .ant-slider-track {
-  background: linear-gradient(to left, color-mix(in srgb, var(--accent) 65%, var(--blue)), var(--accent));
 }
 .remote-player__preview { aspect-ratio: 16 / 9; min-height: 240px; display: grid; place-items: center; overflow: hidden; background: #05070a; border-bottom: 1px solid var(--line); }
 .remote-player__preview img { width: 100%; height: 100%; object-fit: contain; object-position: center; }

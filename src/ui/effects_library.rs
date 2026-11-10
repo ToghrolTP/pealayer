@@ -1,3 +1,4 @@
+use crate::ui::palette::native::controls::CheckboxUiExt;
 use crate::ui::dropdown::DropdownUiExt;
 use crate::app::{ControllerEffectDraft, PealayerApp};
 
@@ -1379,7 +1380,7 @@ fn sequence_cue_context_menu(
         });
         ui.horizontal(|ui| {
             let mut sustained = step.duration_ms.is_some();
-            if ui.checkbox(&mut sustained, designer_tr(ui, "Length")).changed() {
+            if ui.themed_checkbox(&mut sustained, designer_tr(ui, "Length")).changed() {
                 step.duration_ms = sustained.then_some(1000);
             }
             if let Some(duration) = &mut step.duration_ms {
@@ -1632,7 +1633,7 @@ fn draw_sequence_timeline(
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.strong(format!("{} {}", crate::ui::icons::WAVEFORM, designer_tr(ui, "Effect timeline")));
-                if ui.checkbox(&mut show_repeats, designer_tr(ui, "Show repeat ghosts"))
+                if ui.themed_checkbox(&mut show_repeats, designer_tr(ui, "Show repeat ghosts"))
                     .on_hover_text(designer_tr(ui, "Repeated cues are linked to their original; hiding them does not disable repetition"))
                     .changed() {
                     cancel_repeat_drag(ui, draft, drag_id);
@@ -1665,7 +1666,7 @@ fn draw_sequence_timeline(
                 ui.label(crate::ui::effects_library::designer_label(ui, "Zoom"));
                 ui.add(egui::Slider::new(&mut zoom, 30.0..=320.0).show_value(false));
                 ui.separator();
-                ui.checkbox(&mut snap, designer_tr(ui, "Snap"));
+                ui.themed_checkbox(&mut snap, designer_tr(ui, "Snap"));
                 crate::ui::dropdown::ComboBox::from_id_salt((state_prefix.clone(), "grid"))
                     .selected_text(crate::duration::format_time_value_ms(quantum_ms))
                     .show_ui(ui, |ui| {
@@ -2150,7 +2151,7 @@ fn draw_sequence_timeline(
                     canvas_response.context_menu(|ui| {
                         ui.strong(designer_tr(ui, "Effect timeline"));
                         ui.separator();
-                        ui.checkbox(&mut snap, designer_tr(ui, "Snap to grid"));
+                        ui.themed_checkbox(&mut snap, designer_tr(ui, "Snap to grid"));
                         if ui
                             .add_enabled(sequence_needs_quantize(&draft.steps, quantum_ms), egui::Button::new(format!(
                                 "{} {}",
@@ -2332,7 +2333,7 @@ fn draw_effect_repeat_controls(
     ui.label(crate::ui::i18n::tr(language, "Repeat effect"));
     ui.horizontal(|ui| {
         let mut enabled = draft.repeat_count > 1;
-        if ui.checkbox(&mut enabled, crate::ui::i18n::tr(language, "Repeat the entire effect")).changed() {
+        if ui.themed_checkbox(&mut enabled, crate::ui::i18n::tr(language, "Repeat the entire effect")).changed() {
             draft.repeat_count = if enabled { 2 } else { 1 };
             draft.repeat_interval_ms = 0;
         }
@@ -2416,7 +2417,7 @@ fn draw_timeline_authoring_fields(
         ui.label(crate::ui::effects_library::designer_label(ui, "Transition"));
         ui.horizontal(|ui| {
             let mut enabled = step.to_value.is_some();
-            if ui.checkbox(&mut enabled, designer_tr(ui, "Fade to")).changed() {
+            if ui.themed_checkbox(&mut enabled, designer_tr(ui, "Fade to")).changed() {
                 step.to_value = enabled.then_some(step.value.unwrap_or_default());
             }
             if enabled {
@@ -2428,7 +2429,7 @@ fn draw_timeline_authoring_fields(
         ui.label(crate::ui::effects_library::designer_label(ui, "Transition"));
         ui.horizontal(|ui| {
             let mut enabled = step.to_red.is_some();
-            if ui.checkbox(&mut enabled, designer_tr(ui, "Fade to")).changed() {
+            if ui.themed_checkbox(&mut enabled, designer_tr(ui, "Fade to")).changed() {
                 if enabled {
                     step.to_red = step.red;
                     step.to_green = step.green;
@@ -2648,7 +2649,7 @@ fn draw_sequence_step_editor(
                         ui.label(crate::ui::effects_library::designer_label(ui, "Repeat step"));
                         ui.horizontal(|ui| {
                             let mut enabled = step.repeat_count.unwrap_or(1) > 1;
-                            if ui.checkbox(&mut enabled, designer_tr(ui, "Enabled")).changed() {
+                            if ui.themed_checkbox(&mut enabled, designer_tr(ui, "Enabled")).changed() {
                                 step.repeat_count = enabled.then_some(2);
                                 step.repeat_interval_ms = None;
                             }
@@ -3338,14 +3339,14 @@ fn draw_capture_selection(app: &mut PealayerApp, ui: &mut egui::Ui) {
             ui.label(crate::ui::i18n::tr(language, "Choose channels or opcodes; nothing is selected by default"));
             let authoring = &mut app.hardware_effect_authoring;
             ui.add_enabled_ui(!locked, |ui| {
-                ui.checkbox(&mut authoring.capture_selection.all, crate::ui::i18n::tr(language, "All supported commands (all channels)"));
+                ui.themed_checkbox(&mut authoring.capture_selection.all, crate::ui::i18n::tr(language, "All supported commands (all channels)"));
                 ui.weak(crate::ui::i18n::tr(language, "Opcode selection captures all targets of that command"));
                 egui::ScrollArea::vertical().max_height(380.0).show(ui, |ui| {
                     for control in &authoring.capture_capabilities.controls {
                         if !matches!(control.kind.as_str(), "motion" | "relay" | "pwm") { continue; }
                         if authoring.capture_mode == "board-retained" && control.kind == "pwm" { continue; }
                         let mut selected = authoring.capture_selection.control_keys.contains(&control.key);
-                        if ui.checkbox(&mut selected, &control.name).changed() {
+                        if ui.themed_checkbox(&mut selected, &control.name).changed() {
                             authoring.capture_selection.control_keys.retain(|key| key != &control.key);
                             if selected { authoring.capture_selection.control_keys.push(control.key.clone()); }
                         }
@@ -3354,7 +3355,7 @@ fn draw_capture_selection(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     for opcode in &authoring.capture_capabilities.opcodes {
                         if !opcode.capture_modes.contains(&authoring.capture_mode) { continue; }
                         let mut selected = authoring.capture_selection.opcodes.contains(&opcode.opcode);
-                        if ui.checkbox(&mut selected, format!("0x{:02X} · {}", opcode.opcode, opcode.name)).changed() {
+                        if ui.themed_checkbox(&mut selected, format!("0x{:02X} · {}", opcode.opcode, opcode.name)).changed() {
                             authoring.capture_selection.opcodes.retain(|value| *value != opcode.opcode);
                             if selected { authoring.capture_selection.opcodes.push(opcode.opcode); }
                         }
@@ -3902,7 +3903,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                                 }
                                                 ui.end_row();
                                                 ui.label(crate::ui::effects_library::designer_label(ui, "Keep outputs on cancel"));
-                                                ui.checkbox(
+                                                ui.themed_checkbox(
                                                     &mut app.effect_library_draft
                                                         .keep_outputs_on_cancel,
                                                     "",

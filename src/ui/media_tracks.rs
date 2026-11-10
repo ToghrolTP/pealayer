@@ -1,3 +1,4 @@
+use crate::ui::palette::native::controls::CheckboxUiExt;
 use crate::app::{MediaTrackInfo, MediaTrackKey, MediaTrackType, PealayerApp};
 use crate::ui::dropdown::DropdownUiExt;
 use eframe::egui;
@@ -50,7 +51,7 @@ pub(crate) fn draw_track_menu(app: &mut PealayerApp, ui: &mut egui::Ui, kind: Me
     if kind == MediaTrackType::Audio {
         let mut muted = app.is_muted;
         if ui
-            .checkbox(&mut muted, app.tr("Mute audio"))
+            .themed_checkbox(&mut muted, app.tr("Mute audio"))
             .on_hover_text(app.tr("Mute playback without changing the selected audio track."))
             .changed()
         {

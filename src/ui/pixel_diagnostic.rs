@@ -83,7 +83,7 @@ pub(crate) fn draw(
     if ui
         .add_enabled(
             ready && !busy,
-            egui::Checkbox::new(&mut arm, app.tr("Arm one test")),
+            crate::ui::palette::native::controls::Checkbox::new(&mut arm, app.tr("Arm one test")),
         )
         .changed()
     {
