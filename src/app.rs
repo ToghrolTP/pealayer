@@ -6202,6 +6202,7 @@ impl PealayerApp {
             && !self.dock_state.layout.contains(&tab) { return; }
         self.show_four_d_editor = true;
         if let Ok(pane) = crate::ui::sidebar_rail::SidebarPane::try_from(tab) {
+            self.sidebar_rail_state.last_sidebar[pane.index()] = false;
             if self.sidebar_rail_state.open == Some(pane) {
                 self.sidebar_rail_state.open = None;
                 self.save_config();
@@ -6248,16 +6249,66 @@ impl PealayerApp {
         pane: crate::ui::sidebar_rail::SidebarPane,
     ) -> Result<(), String> {
         let tab = crate::ui::layout::PealayerTab::from(pane);
+        let location = self.dock_state.layout.location(&tab).ok();
         if self.dock_state.layout.contains(&tab) {
             self.dock_state.set_visible(tab, false,
                 Some(crate::ui::layout::PealayerTab::ProgramMonitor),
                 |_| craft_ui::docking::Permissions::default())
                 .map_err(|error| format!("Cannot open sidebar panel: {error:?}"))?;
         }
+        if let Some(location) = location { self.sidebar_rail_state.remember_dock_size(tab, &location); }
+        if let Some(previous) = self.sidebar_rail_state.open { self.sidebar_rail_state.remember_side(previous); }
         self.show_four_d_editor = true;
         self.sidebar_rail_state.enabled = true;
+        self.sidebar_rail_state.width = self.sidebar_rail_state.widths[pane.index()]
+            .filter(|width| width.is_finite())
+            .unwrap_or(self.sidebar_rail_state.width)
+            .clamp(crate::ui::sidebar_rail::SidebarPaneContent::MIN_WIDTH, crate::ui::sidebar_rail::SidebarPaneContent::MAX_WIDTH);
+        self.sidebar_rail_state.last_sidebar[pane.index()] = true;
         self.sidebar_rail_state.open = Some(pane);
         self.deferred_config_save = true;
+        Ok(())
+    }
+
+    /// Rail shortcuts toggle the visible surface, never silently relocate it.
+    pub(crate) fn is_tab_in_view(&self, ctx: &egui::Context, tab: crate::ui::layout::PealayerTab) -> bool {
+        if self.is_tab_open_in_sidebar(tab) { return true; }
+        let view = crate::ui::layout::DockViewState::load(ctx);
+        self.dock_state.layout.panel_state(&tab) == craft_ui::docking::PanelState::Front
+            && !view.collapsed.contains(&tab) && view.maximized.is_none_or(|active| active == tab)
+    }
+
+    fn reveal_rail_docked_panel(&mut self, tab: crate::ui::layout::PealayerTab) -> Result<(), String> {
+        self.dock_state.set_visible(tab, true, Some(crate::ui::layout::PealayerTab::ProgramMonitor), |_| Default::default())
+            .map_err(|error|format!("Cannot show panel: {error:?}"))?;
+        if let Ok(pane) = crate::ui::sidebar_rail::SidebarPane::try_from(tab) { self.sidebar_rail_state.last_sidebar[pane.index()] = false; }
+        self.show_four_d_editor = true;
+        self.pending_tab_reveals.retain(|pending| *pending != tab);
+        self.pending_tab_reveals.push(tab);
+        Ok(())
+    }
+
+    pub(crate) fn toggle_rail_panel(&mut self, ctx: &egui::Context, tab: crate::ui::layout::PealayerTab) -> Result<(), String> {
+        use craft_ui::docking::Permissions;
+        if self.dock_state.locked { return Err("Unlock the workspace before showing or hiding a panel".into()); }
+        if self.is_tab_open_in_sidebar(tab) {
+            if let Ok(pane) = crate::ui::sidebar_rail::SidebarPane::try_from(tab) { self.sidebar_rail_state.remember_side(pane); }
+            self.sidebar_rail_state.open = None;
+        } else if self.dock_state.layout.contains(&tab) {
+            let visible = self.is_tab_in_view(ctx, tab);
+            if visible {
+                if let Ok(location) = self.dock_state.layout.location(&tab) { self.sidebar_rail_state.remember_dock_size(tab, &location); }
+                self.dock_state.set_visible(tab, false, None, |_| Permissions::default()).map_err(|e| format!("Cannot hide panel: {e:?}"))?;
+                if let Ok(pane) = crate::ui::sidebar_rail::SidebarPane::try_from(tab) { self.sidebar_rail_state.last_sidebar[pane.index()] = false; }
+                self.pending_tab_reveals.retain(|pending| *pending != tab);
+            } else { self.reveal_rail_docked_panel(tab)?; }
+        } else if let Ok(pane) = crate::ui::sidebar_rail::SidebarPane::try_from(tab)
+            && self.sidebar_rail_state.last_sidebar[pane.index()] {
+            self.open_sidebar_pane(pane)?;
+        } else { self.reveal_rail_docked_panel(tab)?; }
+        self.sync_terminal_visibility_from_workspace();
+        self.deferred_config_save = true;
+        ctx.request_repaint();
         Ok(())
     }
 

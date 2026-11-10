@@ -2,6 +2,22 @@
 
 ## Behavior
 
+- Panel shortcuts now **toggle in their last location**. A visible panel hides;
+  clicking again restores its docked/floating location or sidebar ownership.
+  An inactive or collapsed dock tab is revealed first rather than closed. Explicit
+  Open in sidebar and Dock to Workspace actions remain available in the menu.
+- Individual sidebar widths and normal split sizes survive closing, tab grouping,
+  serialization and drag/drop. Moving an existing sidebar into a horizontal dock
+  carries its current width; otherwise docking retains the remembered split size.
+  A rejected or cancelled drop changes neither layout nor placement memory.
+- Active rail actions use a restrained palette-tinted surface, thin outline and
+  inset edge marker, with contrasting neutral icon ink. Hover, press, focus and
+  disabled states retain the exact same hit/paint bounds; never paint accent ink
+  over an accent-filled tile. Every visible dock/sidebar panel is reflected.
+- Sidebar headers now use application-owned centered icon/title, three-dot menu
+  and configurable ×. The optional custom chevron returns the panel to its rail;
+  it follows the existing hidden-by-default header preference. The stock donor
+  title/menu chevron is not rendered. Context menus omit empty action separators.
 - The rail uses Pealayer's Phosphor icons and palette, with fixed-size targets,
   visible keyboard focus and Up/Down/Home/End navigation. RTL mirrors its edge.
 - Right-click an icon to open its destination, dock a panel in the workspace,
@@ -38,6 +54,39 @@ placement remains part of workspace/session snapshots; shortcut customization is
 application configuration. The current config API can update these fields; the
 existing process-local Preferences navigation target is `sidebar_rail` with
 `scroll_y: 0`. No second settings store or hardware protocol was introduced.
+
+## Process-local API
+
+The existing `pealayer.workspace.tools.control` JSON-RPC method and
+`workspace_tools` command now accept typed panel operations. The same command
+uses existing HTTP/native IPC, WM_COPYDATA and socket dispatch rather than
+simulated pointer input. For example, POST `/api/player/command`:
+
+```json
+{"command":"workspace_tools","action":"panel","panel":"EffectsLibrary","operation":"toggle"}
+```
+
+Other operations: `sidebar`, `dock` (optional `anchor` and `zone`),
+`sidebar_width` (`width`, bounded to 240–600 points) and `sidebar_menu`.
+Width/menu require the named panel to be in the sidebar; unsupported sidebar
+destinations fail. Layout changes respect workspace locking; a locked sidebar
+menu can still be viewed with its unavailable actions disabled. The tools
+snapshot includes panel location/ownership and sidebar placement/size memory.
+These commands are process-local even when Pealayer consumes a remote authority;
+they do not execute shell input or hardware actions.
+
+## Current repair verification
+
+The focused sidebar, CraftUI header, egui Dock header and workspace-control
+suites pass: 64 test executions, 63 distinct tests. Coverage includes native
+pointer toggles, active-icon ink/geometry through both palettes/themes, RTL and
+fractional scaling, exact dock-tree restoration, per-panel widths and storage,
+current-width drag sizing, invalid drops, menu click/× handling, duplicate-divider
+paint checks, API validation, locks, modal cancellation and existing header chrome.
+The clean package is installed and native before/after captures are inspected and
+published in the [sidebar recovery receipt](sidebar-panel-recovery.md). Live API
+toggle/width/dock checks pass and the original complete layout is restored. The
+older receipt below is historical; Cafe remains explicitly user-deferred/offline.
 
 ## Verification and delivery
 
