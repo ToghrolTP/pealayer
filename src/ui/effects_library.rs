@@ -4164,13 +4164,14 @@ mod tests {
                 overwritten,
                 ..Default::default()
             };
-            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 draw_recording_retention_warning(ui, &recording);
             });
             let painted = output.shapes.iter().any(|shape| matches!(
                 &shape.shape,
                 egui::epaint::Shape::Text(text) if text.galley.text().contains("Earlier actions may be missing.")
             ));
+            output.textures_delta.clear();
             assert_eq!(painted, expected);
         }
     }
