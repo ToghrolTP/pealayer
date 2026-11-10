@@ -14,8 +14,8 @@ statements are not the present product state.
 monitor controls, the Standard ruler, sidebar and saved workspace behavior,
 with independent optional FilmCraft presentations in both workspace renderers.
 The 34 preceding stacked PRs were consolidated with a history-preserving merge
-into main. Project persistence #227 remains a separate unfinished draft;
-#248 remains open for explicit user merge approval. Local tests and the matched
+into main. PR #248 also merged. Project persistence has its own [implementation
+and acceptance record](project-persistence-draft.md). Local tests and the matched
 native screenshot gallery are recorded in the linked review. Existing taskbar
 artwork acceptance and deferred Cafe delivery are not closed by source merging.
 The follow-up audit confirmed that ancestry alone had concealed lost live

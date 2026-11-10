@@ -54,6 +54,7 @@ pub enum PreferenceControlKind {
     Select,
     ChoiceSlider,
     Text,
+    MultilineText,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -700,6 +701,29 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
                 Some("Speed used while holding the configured temporary fast-forward gesture");
             control
         },
+        {
+            let mut control = PreferenceControl::number(
+                "double_click_interval_ms",
+                "playback",
+                "Player controls",
+                "Video double-click interval (ms)",
+                100.0,
+                1_000.0,
+                10.0,
+            );
+            control.description = Some("Time between clicks on the native video to toggle fullscreen");
+            control
+        },
+        {
+            let mut control = PreferenceControl::boolean(
+                "hold_fast_forward_wait_for_double_click",
+                "playback",
+                "Player controls",
+                "Wait for double-click before fast-forwarding",
+            );
+            control.description = Some("A stationary hold on native video waits for the double-click interval. Turn off to use 180 ms.");
+            control
+        },
         PreferenceControl::boolean(
             "show_subseconds",
             "playback",
@@ -790,6 +814,11 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             control.description = Some("Applied in order to every text subtitle");
             control
         },
+        PreferenceControl::boolean("project_discovery.enabled", "playback", "Associated projects", "Load the project associated with opened media"),
+        PreferenceControl::boolean("project_discovery.remembered", "playback", "Associated projects", "Search remembered project associations"),
+        PreferenceControl::boolean("project_discovery.beside_media", "playback", "Associated projects", "Search beside local media (.pealayer.json)"),
+        PreferenceControl::boolean("project_discovery.search_paths", "playback", "Associated projects", "Search configured project folders"),
+        {let mut control=PreferenceControl::text("project_discovery.folders", "playback", "Associated projects", "Project folders (one per line)", "Folder paths");control.kind=PreferenceControlKind::MultilineText;control},
         PreferenceControl::boolean(
             "timeline_subtitle_segments",
             "playback",
@@ -1558,7 +1587,7 @@ fn semantic_preference_icon(control: &PreferenceControl) -> &'static str {
             PreferenceControlKind::MultiSelect => "globe",
             PreferenceControlKind::ReplacementList => "text-align-left",
             PreferenceControlKind::Select => "list-checks",
-            PreferenceControlKind::Text => "pencil-simple",
+            PreferenceControlKind::Text | PreferenceControlKind::MultilineText => "pencil-simple",
         },
     }
 }
@@ -2361,6 +2390,7 @@ mod tests {
         for (key, min, max) in [
             ("playback_speed", 0.25, 4.0),
             ("temporary_fast_forward_speed", 1.0, 16.0),
+            ("double_click_interval_ms", 100.0, 1_000.0),
         ] {
             let control = controls
                 .iter()
@@ -2370,6 +2400,30 @@ mod tests {
             assert_eq!(control.section, "playback");
             assert_eq!(control.minimum, Some(min));
             assert_eq!(control.maximum, Some(max));
+        }
+    }
+
+    #[test]
+    fn video_click_timing_preferences_are_shared_and_validated() {
+        let original: crate::config::AppConfig = serde_json::from_str("{}").unwrap();
+        let edited = original.apply_patch(&serde_json::json!({
+            "double_click_interval_ms": 650,
+            "hold_fast_forward_wait_for_double_click": false,
+        })).unwrap();
+        let contract = preferences_contract(&edited);
+        assert_eq!(contract.defaults["double_click_interval_ms"], 300);
+        assert_eq!(contract.defaults["hold_fast_forward_wait_for_double_click"], true);
+        assert_eq!(contract.values["double_click_interval_ms"], 650);
+        assert_eq!(contract.values["hold_fast_forward_wait_for_double_click"], false);
+        assert!(contract.controls.iter().any(|control|
+            control.key == "hold_fast_forward_wait_for_double_click"
+                && control.section == "playback"
+                && matches!(control.kind, PreferenceControlKind::Boolean)
+        ));
+        for interval in [99, 1_001] {
+            assert!(original.apply_patch(&serde_json::json!({
+                "double_click_interval_ms": interval,
+            })).is_err());
         }
     }
 

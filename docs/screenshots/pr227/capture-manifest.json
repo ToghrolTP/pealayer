@@ -1,0 +1,28 @@
+{
+  "revision": "54e05fb73647770967506be1c665890a1274a796",
+  "evidence": "Production Web bundle from the checkpoint in Chromium; synthetic isolated authority responses and paths. No decoder, board, or filesystem mutation.",
+  "captures": [
+    {
+      "filename": "project-metadata-web-1440.png",
+      "viewport": 1440,
+      "body": 1440,
+      "modal": 820,
+      "title": "Project metadata",
+      "footer": "CloseDownload JSONLoad selectedSave to server"
+    },
+    {
+      "filename": "project-metadata-web-media-details.png",
+      "viewport": 1440,
+      "detail": "Paused-media metadata and exact millisecond fields"
+    },
+    {
+      "filename": "project-metadata-web-430.png",
+      "viewport": 430,
+      "body": 430,
+      "modal": 414,
+      "title": "Project metadata",
+      "footer": "CloseDownload JSONLoad selectedSave to server"
+    }
+  ],
+  "staleRequests": 2
+}

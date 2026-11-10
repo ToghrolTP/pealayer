@@ -36,6 +36,7 @@ interface HeaderBarProps {
   onConnectionTargetChange: (target: string) => void;
   platform: WebPlatformController;
   onBrowseRemote: () => void;
+  onProjects: () => void;
 }
 
 export const HeaderBar: React.FC<HeaderBarProps> = ({
@@ -51,6 +52,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
   onConnectionTargetChange,
   platform,
   onBrowseRemote,
+  onProjects,
 }) => {
   const [connectionOpen, setConnectionOpen] = React.useState(false);
   const [draftTarget, setDraftTarget] = React.useState(connectionTarget);
@@ -124,6 +126,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
           trigger={['click']}
           menu={{
             items: [
+              { key: 'projects', icon: <FolderOpenOutlined />, label: 'Projects, scenes and timelines', onClick: onProjects },
               {
                 key: 'browse-remote',
                 icon: <FolderOpenOutlined />,
