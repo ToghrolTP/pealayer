@@ -2427,18 +2427,11 @@ impl PealayerApp {
                     if self.current_video_path.is_none() {
                         if let Some(path) = rfd::FileDialog::new()
                             .add_filter("Pealayer Timeline", &["json"])
+                            .set_file_name("Timeline.pealayer.json")
                             .save_file()
                         {
-                            self.timeline.track_muted = self.track_muted.clone();
-                            self.timeline.track_soloed = self.track_soloed.clone();
-                            self.timeline.track_locked = self.track_locked.clone();
-                            self.timeline.media_target = self.current_video_path.as_ref().map(|p| p.to_string_lossy().to_string());
-                            if let Err(err) = self.timeline.save_to_file(&path) {
-                                self.show_error = Some(format!("Failed to save timeline: {err}"));
-                            } else {
-                                self.timeline_saved_baseline = Some(self.snapshot_timeline());
-                                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("timeline");
-                                self.set_osd(format!("{} {name}", self.tr("Timeline saved:")));
+                            if let Err(error) = self.save_timeline_file(&path) {
+                                self.show_error = Some(format!("Failed to save timeline: {error}"));
                             }
                         }
                     } else {
@@ -8459,8 +8452,13 @@ impl PealayerApp {
                 }
                 match value.get("operation").and_then(serde_json::Value::as_str){
                     Some("export_config")=>{let config:crate::config::AppConfig=serde_json::from_value(value.get("config").cloned().ok_or("Config is required")?).map_err(|error|error.to_string())?;config.validate()?;config.save_to_path(&path)?;},
-                    Some("open_timeline")=>{self.timeline=crate::four_d::models::Timeline::load_from_file(&path).map_err(|error|error.to_string())?;self.sync_timeline_engine();self.save_config();},
-                    Some("save_timeline")=>self.timeline.save_to_file(&path).map_err(|error|error.to_string())?,
+                    Some("open_timeline")=>{
+                        let mut result = self.open_timeline_file(ctx, &path)?;
+                        result["applied"] = true.into();
+                        return Ok(result);
+                    },
+                    Some("save_timeline")=>self.save_timeline_file(&path)?,
+                    Some("save_timeline_sidecar")=>self.save_timeline_sidecar_as(&path)?,
                     _=>return Err("Unsupported server file operation".into()),
                 }
             },
@@ -9055,12 +9053,17 @@ impl PealayerApp {
         let Some(sidecar) = self.current_timeline_sidecar_path() else {
             return Err(self.tr("No local media loaded to associate timeline sidecar"));
         };
+        self.save_timeline_sidecar_as(&sidecar)?;
+        Ok(sidecar)
+    }
+
+    fn save_timeline_sidecar_as(&mut self, sidecar: &std::path::Path) -> Result<(), String> {
         self.timeline.track_muted = self.track_muted.clone();
         self.timeline.track_soloed = self.track_soloed.clone();
         self.timeline.track_locked = self.track_locked.clone();
         self.timeline.media_target = self.current_video_path.as_ref().map(|p| p.to_string_lossy().to_string());
         self.timeline
-            .save_to_file(&sidecar)
+            .save_to_file(sidecar)
             .map_err(|e| format!("Failed to save timeline: {e}"))?;
         self.timeline_saved_baseline = Some(self.snapshot_timeline());
         let name = sidecar
@@ -9068,7 +9071,7 @@ impl PealayerApp {
             .and_then(|n| n.to_str())
             .unwrap_or("timeline");
         self.set_osd(format!("{} {name}", self.tr("Timeline saved:")));
-        Ok(sidecar)
+        Ok(())
     }
 
     fn persist_timeline_track_preferences(&mut self) {

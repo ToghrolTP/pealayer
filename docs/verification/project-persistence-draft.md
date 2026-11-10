@@ -150,3 +150,20 @@ TypeScript and guardrails passed. Isolated native and external decoder
 restoration and corrupt-file rollback also passed again. Physical output, PWM
 recall revision, cancellation under live transport failure, and deployment
 remain separate acceptance gates.
+
+### Standalone timelines
+
+Explicit Timeline Save As uses the same bounded, atomic timeline document as
+the Project editor. It keeps the playhead, zoom, scroll, selection and track
+state. Native Open Timeline and the peer file API use the same reader and
+decoder-confirmed restore path. The Sidecar action still writes the raw
+media-sidecar format and Open Timeline can read those files without imposing a
+saved seek position they did not contain. Tagged files of another document
+kind are rejected rather than reinterpreted as raw timelines.
+
+The [live timeline fixture](project-persistence-timeline-fixture.json) saved a
+3.640-second paused position through the peer file API, moved the playhead and
+reopened the typed file at the exact saved position. It saved and reopened a
+raw sidecar while retaining the 5.120-second paused position and decoder
+revision. It also verified that the timeline action rejects a scene document.
+The isolated document and project editor suite passed all 12 focused tests.

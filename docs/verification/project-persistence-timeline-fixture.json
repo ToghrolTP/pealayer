@@ -1,0 +1,30 @@
+{
+  "source_revision": "02814226ba1ca99a02f3a168dae70a73be9b302a",
+  "executable_sha256": "1c67dae8d40d8219648689de4ee4d751fe305f129166e279b4983009d86c07d4",
+  "runtime": "Isolated Windows Pealayer with internal libmpv and an eight-second generated video",
+  "board_connected": false,
+  "operation_route": "/api/peer/files",
+  "cases": [
+    {
+      "kind": "pealayer-timeline",
+      "case": "explicit timeline save",
+      "position_ms": 3640
+    },
+    {
+      "case": "explicit timeline reopen",
+      "decoder_settled": true,
+      "paused": true,
+      "position_ms": 3640
+    },
+    {
+      "seek_unchanged": true,
+      "case": "raw sidecar save and reopen",
+      "position_ms": 5120,
+      "typed_wrapper": false
+    },
+    {
+      "case": "wrong typed document refused",
+      "status": 400
+    }
+  ]
+}

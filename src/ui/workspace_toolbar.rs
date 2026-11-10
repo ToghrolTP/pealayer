@@ -541,7 +541,7 @@ mod native {
                     if crate::peer::active() {
                         super::super::peer_browser::open(
                             ctx,
-                            super::super::peer_browser::Purpose::TimelineSave,
+                            super::super::peer_browser::Purpose::TimelineSave { sidecar: true },
                             None,
                         );
                     } else if let Err(error) = app.save_current_timeline_sidecar() {

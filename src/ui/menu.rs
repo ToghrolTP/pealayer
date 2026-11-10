@@ -291,34 +291,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             .add_filter("Pealayer Timeline", &["json"])
                             .pick_file()
                         {
-                            match crate::four_d::models::Timeline::load_from_file(&path) {
-                                Ok(timeline) => {
-                                    app.track_muted = timeline.track_muted.clone();
-                                    app.track_soloed = timeline.track_soloed.clone();
-                                    app.track_locked = timeline.track_locked.clone();
-                                    if let Some(ref target) = timeline.media_target {
-                                        if app.current_video_path.is_none() {
-                                            let media_file = std::path::PathBuf::from(target);
-                                            if media_file.exists() {
-                                                app.load_video_file(media_file);
-                                            }
-                                        }
-                                    }
-                                    app.timeline = timeline;
-                                    app.timeline_saved_baseline = Some(app.snapshot_timeline());
-                                    let compiled = crate::four_d::engine::compile_timeline(
-                                        &app.timeline,
-                                        &app.track_muted,
-                                        &app.track_soloed,
-                                    );
-                                    let _ = app.engine_handle.sender.send(
-                                        crate::four_d::engine::EngineMessage::UpdateQueue(compiled),
-                                    );
-                                }
-                                Err(e) => {
-                                    app.show_error =
-                                        Some(format!("Failed to load timeline: {}", e));
-                                }
+                            if let Err(error) = app.open_timeline_file(&ctx, &path) {
+                                app.show_error = Some(format!("Failed to load timeline: {error}"));
                             }
                         }
                     }
@@ -332,7 +306,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         .shortcut_text("Ctrl+S");
                     if ui.add_enabled(save_enabled, save_btn).clicked() {
                         ui.close();
-                        if crate::peer::active(){crate::ui::peer_browser::open(&ctx,crate::ui::peer_browser::Purpose::TimelineSave,None);}
+                        if crate::peer::active(){crate::ui::peer_browser::open(&ctx,crate::ui::peer_browser::Purpose::TimelineSave { sidecar: true },None);}
                         else if let Err(e) = app.save_current_timeline_sidecar() {
                             app.show_error = Some(e);
                         }
@@ -340,21 +314,14 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
                     if ui.button(app.tr("Save Timeline As...")).clicked() {
                         ui.close();
-                        if crate::peer::active(){crate::ui::peer_browser::open(&ctx,crate::ui::peer_browser::Purpose::TimelineSave,None);}
+                        if crate::peer::active(){crate::ui::peer_browser::open(&ctx,crate::ui::peer_browser::Purpose::TimelineSave { sidecar: false },None);}
                         else if let Some(path) = rfd::FileDialog::new()
                             .add_filter("Pealayer Timeline", &["json"])
+                            .set_file_name("Timeline.pealayer.json")
                             .save_file()
                         {
-                            app.timeline.track_muted = app.track_muted.clone();
-                            app.timeline.track_soloed = app.track_soloed.clone();
-                            app.timeline.track_locked = app.track_locked.clone();
-                            app.timeline.media_target = app.current_video_path.as_ref().map(|p| p.to_string_lossy().to_string());
-                            if let Err(e) = app.timeline.save_to_file(&path) {
-                                app.show_error = Some(format!("Failed to save timeline: {}", e));
-                            } else {
-                                app.timeline_saved_baseline = Some(app.snapshot_timeline());
-                                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("timeline");
-                                app.set_osd(format!("{} {name}", app.tr("Timeline saved:")));
+                            if let Err(error) = app.save_timeline_file(&path) {
+                                app.show_error = Some(format!("Failed to save timeline: {error}"));
                             }
                         }
                     }
