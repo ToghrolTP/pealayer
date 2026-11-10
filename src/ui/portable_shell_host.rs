@@ -566,6 +566,8 @@ impl Host {
         const NUMBER: u32 = 4;
         const DIVIDER: u32 = 8;
         const SUCCESS: u32 = 16;
+        const WARNING: u32 = 32;
+        const ERROR: u32 = 64;
         const INACTIVE: u32 = 128;
         let positions = CString::new(if status.loaded {
             format!(
@@ -579,6 +581,7 @@ impl Host {
         .unwrap();
         let audio = CString::new(status.audio()).unwrap();
         let state = CString::new(status.state()).unwrap();
+        let update = CString::new(status.update_line()).unwrap();
         let row = |label: &CStr, value: &CStr, flags| ReportRow {
             label: label.as_ptr(),
             annotation: std::ptr::null(),
@@ -607,6 +610,17 @@ impl Host {
                     c"○ Disconnected"
                 },
                 if status.controller { SUCCESS } else { INACTIVE },
+            ),
+            row(c"Application", c"", SECTION | DIVIDER),
+            row(
+                c"Update",
+                &update,
+                match status.update.state.as_str() {
+                    "completed" | "current" => SUCCESS,
+                    "failed" => ERROR,
+                    _ if status.update.active() => WARNING,
+                    _ => INACTIVE,
+                },
             ),
         ];
         unsafe {
@@ -642,7 +656,7 @@ impl Drop for Host {
 
 const COMMANDS: &[(&CStr, &CStr)] = &[
     (c"help", c"help — show Pealayer commands"),
-    (c"status", c"status — inspect the current media state"),
+    (c"status", c"status — inspect playback, hardware and app update"),
     (
         c"configure",
         c"configure — edit live Pealayer settings in a table",
@@ -1107,6 +1121,7 @@ mod tests {
         assert_eq!(text.matches("╭─").count(), 1, "{text}");
         assert!(text.contains("00:01:01.250 / 01:00:00.000"), "{text}");
         assert!(text.contains("○ Disconnected"));
+        assert!(text.lines().any(|line| line.contains("Update") && line.ends_with("Idle")));
         assert!(text.contains("─"));
         let positions: Vec<_> = [
             "Ⅱ Paused",

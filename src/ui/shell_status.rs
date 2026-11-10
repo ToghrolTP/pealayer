@@ -9,6 +9,7 @@ pub struct Status {
     pub volume: f64,
     pub muted: bool,
     pub controller: bool,
+    pub update: crate::update::UpdateStatus,
 }
 impl Status {
     /// Explicit reports may follow an ACK before the general UI snapshot has
@@ -32,7 +33,7 @@ impl Status {
         }
     }
     pub fn summary(&self) -> String {
-        format!(
+        let mut summary = format!(
             "{}{} · {} · {} Hardware",
             self.state(),
             if self.loaded {
@@ -42,7 +43,19 @@ impl Status {
             },
             self.audio(),
             if self.controller { "●" } else { "○" }
-        )
+        );
+        if self.update.active() {
+            summary.push_str(" · ↻ ");
+            summary.push_str(&self.update_line());
+        }
+        summary
+    }
+    pub fn update_line(&self) -> String {
+        let phase = self.update.phase_label();
+        match self.update.progress_percent() {
+            Some(percent) => format!("{phase} {:.0}%", percent.floor()),
+            None => phase.into(),
+        }
     }
     pub fn audio(&self) -> String {
         if self.muted {
@@ -211,5 +224,20 @@ mod tests {
         assert!(status.summary().contains("▶ Playing"));
         assert!(status.summary().contains("⊘ Muted (57%)"));
         assert!(status.summary().contains("● Hardware"));
+    }
+
+    #[test]
+    fn update_progress_only_appears_for_the_current_phase() {
+        let mut status = Status::default();
+        assert!(!status.summary().contains("↻"));
+        status.update.state = "downloading".into();
+        status.update.bytes_done = 100;
+        status.update.bytes_total = Some(100);
+        assert!(status.summary().ends_with("↻ Downloading package 100%"));
+        status.update.state = "verifying".into();
+        assert!(status.summary().ends_with("↻ Verifying package"));
+        status.update.state = "completed".into();
+        assert!(!status.summary().contains("↻"));
+        assert_eq!(status.update_line(), "Build acknowledgement received");
     }
 }

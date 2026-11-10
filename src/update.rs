@@ -84,6 +84,21 @@ impl Default for UpdateStatus {
 }
 
 impl UpdateStatus {
+    pub(crate) fn phase_label(&self) -> &'static str {
+        match self.state.as_str() {
+            "idle" => "Idle",
+            "receiving" => "Uploading package",
+            "downloading" => "Downloading package",
+            "verifying" => "Verifying package",
+            "staged" => "Package staged",
+            "restarting" => "Restarting peer gracefully",
+            "completed" => "Build acknowledgement received",
+            "current" => "Build already current",
+            "failed" => "Update failed",
+            _ => "Update status",
+        }
+    }
+
     pub fn active(&self) -> bool {
         matches!(
             self.state.as_str(),

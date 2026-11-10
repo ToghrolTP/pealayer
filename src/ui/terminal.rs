@@ -1530,6 +1530,7 @@ pub fn tick(app: &mut crate::app::PealayerApp, ctx: &egui::Context) {
             volume: live.volume,
             muted: live.muted,
             controller: live.controller_connected,
+            update: crate::update::manager().status(),
         };
         let prompt = shell_status.summary();
         for view in &mut app.terminal_state.views {
