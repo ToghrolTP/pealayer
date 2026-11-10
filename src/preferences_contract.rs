@@ -847,6 +847,7 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
         ),
         PreferenceControl::boolean("remote_folder_auto_next", "playback", "Remote folders", "Automatically play the next file in the folder"),
         PreferenceControl::boolean("remote_folder_thumbnails", "playback", "Remote folders", "Generate thumbnails for listed media files"),
+        PreferenceControl::select("remote_folder_view", "playback", "Remote folders", "Remote folder layout", &[("list", "List"), ("grid", "Grid")]),
         PreferenceControl::boolean(
             "auto_connect_hardware",
             "hardware",

@@ -44,6 +44,13 @@ pub enum SortBy {
     Date,
     Size,
 }
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewMode {
+    #[default]
+    List,
+    Grid,
+}
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct BrowserState {
     pub request_id: u64,
@@ -58,6 +65,8 @@ pub struct BrowserState {
     pub use_proxy: bool,
     pub auto_next: bool,
     pub thumbnails: bool,
+    pub view_mode: ViewMode,
+    pub inspected: Option<RemoteEntry>,
     pub sort: SortBy,
     pub descending: bool,
     pub selected: Option<String>,
@@ -810,6 +819,8 @@ fn prepare_state(browser: &mut Browser, target: &str, use_proxy: bool, mode: Req
     browser.state.use_proxy = use_proxy;
     browser.state.auto_next = config.remote_folder_auto_next;
     browser.state.thumbnails = config.remote_folder_thumbnails;
+    browser.state.view_mode = config.remote_folder_view;
+    browser.state.inspected = None;
     browser.state.loading = mode.verifies() && !target.is_empty();
     browser.state.error = None;
     browser.state.route_errors.clear();
@@ -945,6 +956,7 @@ pub fn close() {
         b.state.loading = false;
         b.pending_play = None;
         b.proxy_override = None;
+        b.state.inspected = None;
         b.state.revision += 1;
     }
 }
@@ -1039,15 +1051,55 @@ pub fn step(current: &str, direction: i32, automatic: bool) -> Option<Playback> 
         use_proxy: b.playlist_proxy,
     })
 }
-pub fn sync_options(auto_next: bool, thumbnails: bool) {
+pub fn sync_options(auto_next: bool, thumbnails: bool, view_mode: ViewMode) {
     if crate::peer::active(){return;}
     if let Ok(mut b) = browser().lock() {
-        if b.state.auto_next != auto_next || b.state.thumbnails != thumbnails {
+        if b.state.auto_next != auto_next || b.state.thumbnails != thumbnails || b.state.view_mode != view_mode {
             b.state.auto_next = auto_next;
             b.state.thumbnails = thumbnails;
+            b.state.view_mode = view_mode;
             b.state.revision += 1;
         }
     }
+}
+
+fn inspect_entry(listing: Option<&RemoteListing>, target: &str) -> Result<RemoteEntry, String> {
+    listing.and_then(|listing| listing.entries.iter().chain(listing.file.iter())
+        .find(|entry| entry.url == target)).cloned()
+        .ok_or_else(|| "This item is no longer in the verified remote listing.".into())
+}
+
+/// Inspect only advertised metadata. Opening Properties never plays, changes
+/// selection, probes an arbitrary URL, or treats a client path as a host path.
+pub fn inspect(target: Option<&str>) -> Result<(), String> {
+    if let Some(client) = crate::peer::client() {
+        return client.queue("/api/player/command", serde_json::json!({"command":"inspect_remote","target":target}));
+    }
+    let mut browser = browser().lock().map_err(|_| "Remote browser unavailable")?;
+    let entry = target.map(|target| inspect_entry(browser.state.listing.as_ref(), target)).transpose()?;
+    browser.state.inspected = entry;
+    browser.state.revision += 1;
+    Ok(())
+}
+
+pub fn retry_thumbnail(target: &str) -> Result<(), String> {
+    if let Some(client) = crate::peer::client() {
+        return client.queue("/api/player/command", serde_json::json!({"command":"retry_remote_thumbnail","target":target}));
+    }
+    let mut browser = browser().lock().map_err(|_| "Remote browser unavailable")?;
+    retry_thumbnail_state(&mut browser.state, target)
+}
+
+fn retry_thumbnail_state(state: &mut BrowserState, target: &str) -> Result<(), String> {
+    let entry = inspect_entry(state.listing.as_ref(), target)?;
+    if !entry.playable { return Err("This item does not support media thumbnails.".into()); }
+    // Never clear an in-flight worker or spawn a duplicate. A failed preview is
+    // retried by the existing bounded queue on the next visible request.
+    if state.thumbnail_status.get(target).is_some_and(|status| status.starts_with("error:")) {
+        state.thumbnail_status.remove(target);
+        state.revision += 1;
+    }
+    Ok(())
 }
 pub fn playback_proxy_for(target: &str) -> Option<bool> {
     let target = normalize(target).ok()?.to_string();
@@ -1102,7 +1154,9 @@ pub fn thumbnail(
     b.state
         .thumbnail_status
         .insert(target.clone(), "loading".into());
+    b.state.revision += 1;
     drop(b);
+    ctx.request_repaint();
     std::thread::spawn(move || {
         let result = if let Some(client)=crate::peer::client(){client.folder_thumbnail(&target)}else{
             crate::server::thumbnails::get_or_generate_remote_thumbnail(&target,use_proxy,config.open_url_proxy_url.as_deref()).map(|file|file.path)
@@ -1135,6 +1189,34 @@ pub fn thumbnail(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn preview_retry_is_verified_and_cannot_duplicate_a_loading_worker() {
+        let entry=RemoteEntry{name:"Movie.mkv".into(),url:"https://files.invalid/Movie.mkv".into(),is_dir:false,playable:true,size_bytes:None,modified:None};
+        let mut listing=test_listing();listing.entries.push(entry.clone());
+        let mut state=BrowserState{listing:Some(listing),revision:7,..Default::default()};
+        state.thumbnail_status.insert(entry.url.clone(),"loading".into());
+        retry_thumbnail_state(&mut state,&entry.url).unwrap();assert_eq!(state.revision,7);assert_eq!(state.thumbnail_status[&entry.url],"loading");
+        let before=state.clone();assert!(retry_thumbnail_state(&mut state,"https://other.invalid/movie.mkv").is_err());assert_eq!(state,before);
+        state.thumbnail_status.insert(entry.url.clone(),"error:Timed out".into());
+        retry_thumbnail_state(&mut state,&entry.url).unwrap();assert!(!state.thumbnail_status.contains_key(&entry.url));assert_eq!(state.revision,8);
+    }
+    #[test]
+    fn properties_use_only_verified_metadata_and_do_not_change_selection_or_playback() {
+        let mut listing=test_listing();
+        listing.entries.push(RemoteEntry{name:"Movie.mkv".into(),url:"https://files.invalid/Movie.mkv".into(),is_dir:false,playable:true,size_bytes:Some(2048),modified:None});
+        let entry=&listing.entries[0];
+        assert_eq!(inspect_entry(Some(&listing),&entry.url).unwrap(),*entry);
+        assert!(inspect_entry(Some(&listing),"https://other.invalid/private").is_err());
+        assert!(inspect_entry(None,&entry.url).is_err());
+        let mut direct=listing.clone();direct.file=Some(entry.clone());direct.entries.clear();
+        assert_eq!(inspect_entry(Some(&direct),&entry.url).unwrap(),*entry);
+        let state=BrowserState{inspected:Some(entry.clone()),view_mode:ViewMode::Grid,..Default::default()};
+        let restored:BrowserState=serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+        assert_eq!(restored,state);assert!(restored.selected.is_none());
+        let mut browser=Browser::default();browser.state=state;
+        prepare_state(&mut browser,"https://index.invalid/",false,RequestMode::Browse,&crate::config::AppConfig::default());
+        assert!(browser.state.inspected.is_none());
+    }
     #[test]
     fn directory_history_commits_only_verified_success_and_branches_without_losing_the_current_listing() {
         let cfg=crate::config::AppConfig::default();let mut b=Browser::default();b.generation=1;

@@ -1458,7 +1458,7 @@ impl eframe::App for PealayerApp {
         let appearance_changed =
             crate::platform::interop::get_live_appearance().as_ref() != Some(&appearance);
         let messages = crate::messaging::snapshot();
-        crate::remote_location::sync_options(web_config.remote_folder_auto_next, web_config.remote_folder_thumbnails);
+        crate::remote_location::sync_options(web_config.remote_folder_auto_next, web_config.remote_folder_thumbnails, web_config.remote_folder_view);
         let remote_changed = crate::platform::interop::get_live_remote_revision() != crate::remote_location::revision();
         let messages_changed = crate::platform::interop::get_live_message_snapshot() != messages;
         if messages_changed {
@@ -4561,9 +4561,11 @@ impl PealayerApp {
                     else { crate::remote_location::request(&target, use_proxy, false, ctx) };
                 if let Err(error) = result { self.set_osd(error); }
             },
-            InteropCommand::SelectRemote { target, play } => { if let Err(error) = crate::remote_location::select(&target, play) { self.set_osd(error); } },
-            InteropCommand::SortRemote { by, descending } => crate::remote_location::sort(by, descending),
-            InteropCommand::CloseRemoteBrowser => crate::remote_location::close(),
+            InteropCommand::SelectRemote { target, play } => { if let Err(error) = crate::remote_location::select(&target, play) { self.set_osd(error); } ctx.request_repaint(); },
+            InteropCommand::InspectRemote { target } => { if let Err(error) = crate::remote_location::inspect(target.as_deref()) { self.set_osd(error); } ctx.request_repaint(); },
+            InteropCommand::RetryRemoteThumbnail { target } => { if let Err(error) = crate::remote_location::retry_thumbnail(&target) { self.set_osd(error); } ctx.request_repaint(); },
+            InteropCommand::SortRemote { by, descending } => { crate::remote_location::sort(by, descending); ctx.request_repaint(); },
+            InteropCommand::CloseRemoteBrowser => { crate::remote_location::close(); ctx.request_repaint(); },
             InteropCommand::RemoteHistory {direction,parent} => {if let Err(error)=crate::remote_location::navigate_history(direction,parent,ctx){self.set_osd(error);}},
             InteropCommand::SetFullscreen { enabled } => self.set_fullscreen(ctx, enabled),
             InteropCommand::ToggleFullscreen => self.toggle_fullscreen(ctx),

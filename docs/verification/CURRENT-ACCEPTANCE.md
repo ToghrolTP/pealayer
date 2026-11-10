@@ -10,6 +10,12 @@ statements are not the present product state.
 
 ## Publication and workspace tools checkpoint
 
+[Remote Location presentation](remote-location-presentation.md) replaces the
+incomplete rows with shared List/Grid controls, restrained interaction states,
+visible preview loading/failure/retry and bounded menus with real owner-backed
+Properties. Native pointer/paint and Web contract checks cover the new behavior;
+installation and actual native/browser screenshot acceptance remain open.
+
 [Surface-scoped mouse controls](mouse-bindings.md) add configurable Back/Forward
 actions, video click-versus-drag modifiers, default middle-click fullscreen and
 authority-owned verified folder history across native/Web. The isolated native

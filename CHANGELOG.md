@@ -6,6 +6,15 @@ retroactively attributed to an older download.
 
 ## Next milestone · unreleased
 
+### 🗂️ Remote locations
+
+- Browse files in a saved List or Grid layout, with consistent hover, selection
+  and keyboard-focus styling that follows the application's palette.
+- See when thumbnails are loading, inspect failures and retry unavailable previews.
+- Open item Properties from the context menu; long filenames stay bounded in
+  menus and wrap in the details dialog. Search now shares the corrected icon
+  picker header, with its magnifier inside the field and view controls aligned.
+
 ### 🖱️ Contextual mouse controls
 
 - Configure Back/Forward buttons separately for video, timelines, effects and
