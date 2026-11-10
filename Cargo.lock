@@ -3540,6 +3540,7 @@ dependencies = [
  "tar",
  "ttf-parser",
  "tungstenite",
+ "unicode-width 0.1.14",
  "url",
  "uuid",
  "vt100",

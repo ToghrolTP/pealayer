@@ -22,3 +22,12 @@ The focused checks cover stream identity, time origin, overlapping cues,
 missing ends, and the actual painted gap between cue rectangles. Run the
 FFprobe fixture together with those checks using
 `cargo test --lib subtitle_timing -- --include-ignored`.
+
+### Running application
+
+The native capture shows two tracks of a synthetic subtitle fixture, with
+the inactive track dimmed and its offset cue intervals still visible. It
+was taken from the clean playback review at `e1a1367` before reconciling
+the Terminal changes and CI fixtures.
+
+![Native subtitle cue intervals](../screenshots/native-subtitle-timeline.png)
