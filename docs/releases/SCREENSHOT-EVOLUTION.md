@@ -1,4 +1,4 @@
-# Pealayer's interface evolution
+# 📸 Pealayer's interface evolution
 
 The [chronological version index](README.md) now assigns the preserved captures
 to their actual source milestones. In particular, the previously date-named

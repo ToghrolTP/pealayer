@@ -369,10 +369,14 @@ jobs:
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             prerelease=false
             [[ "$GITHUB_REF_NAME" == *-* ]] && prerelease=true
-            { echo "tag=$GITHUB_REF_NAME"; echo "name=Pealayer $GITHUB_REF_NAME"; echo "prerelease=$prerelease"; } >> "$GITHUB_OUTPUT"
+            notes="docs/releases/$GITHUB_REF_NAME.md"
+            [[ -s "$notes" ]] || { echo "Missing curated version notes: $notes" >&2; exit 1; }
+            name="$(sed -n '1s/^# //p' "$notes" | tr -d '\r')"
+            [[ "$name" == *"Pealayer $GITHUB_REF_NAME — "* ]] || { echo 'Expected a decorated Pealayer version heading' >&2; exit 1; }
+            { echo "tag=$GITHUB_REF_NAME"; echo "name=$name"; echo "prerelease=$prerelease"; } >> "$GITHUB_OUTPUT"
           else
             safe="${GITHUB_REF_NAME//\//-}"
-            { echo "tag=branch-$safe"; echo "name=Pealayer branch build ($safe)"; echo 'prerelease=true'; } >> "$GITHUB_OUTPUT"
+            { echo "tag=branch-$safe"; echo "name=🧪 Pealayer branch build ($safe)"; echo 'prerelease=true'; } >> "$GITHUB_OUTPUT"
           fi
       - name: "📝 Generate release notes, manifest, and checksums"
         env:

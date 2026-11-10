@@ -55,7 +55,8 @@
           "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/status-bar-hardware-origin.png",
           "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/verification/status-bar-evolution.md"
         }
-      ]
+      ],
+      "emoji": "🌱"
     },
     {
       "tag": "v0.2.0",
@@ -194,7 +195,8 @@
           "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/pealayer-fa-dark.png",
           "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/manifest.json"
         }
-      ]
+      ],
+      "emoji": "🎬"
     },
     {
       "tag": "v0.3.0-alpha.1",
@@ -353,7 +355,8 @@
           "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/releases/v0.3.0-alpha.1/native-workspace.jpg",
           "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/releases/v0.3.0-alpha.1/manifest.json"
         }
-      ]
+      ],
+      "emoji": "🔌"
     },
     {
       "tag": "v0.4.0-alpha.1",
@@ -581,7 +584,8 @@
           "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/effects-recording/native-recorder-final/pealayer-en-dark.png",
           "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/effects-recording/native-recorder-final/manifest.json"
         }
-      ]
+      ],
+      "emoji": "🌐"
     },
     {
       "tag": "v0.5.0-alpha.1",
@@ -1024,7 +1028,8 @@
           "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/ui-history-october10-preferences.png",
           "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/verification/october10-ui-comparison.md"
         }
-      ]
+      ],
+      "emoji": "🎧"
     },
     {
       "tag": "v0.6.0-alpha.1",
@@ -1384,7 +1389,8 @@
           "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/status-bar-compact.png",
           "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/verification/status-bar-history-audit.md"
         }
-      ]
+      ],
+      "emoji": "🎛️"
     },
     {
       "tag": "v0.7.0-alpha.1",
@@ -1665,7 +1671,8 @@
           "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/releases/v0.7.0-alpha.1/native-workspace.jpg",
           "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/releases/v0.7.0-alpha.1/manifest.json"
         }
-      ]
+      ],
+      "emoji": "📡"
     },
     {
       "tag": "v0.8.0-alpha.1",
@@ -1858,7 +1865,8 @@
           "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/releases/v0.8.0-alpha.1/native-workspace.jpg",
           "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/releases/v0.8.0-alpha.1/manifest.json"
         }
-      ]
+      ],
+      "emoji": "🧪"
     },
     {
       "tag": "v0.9.0-alpha.1",
@@ -2038,7 +2046,8 @@
           "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/status-bar-divider-fixed.png",
           "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/verification/status-bar-evolution.md"
         }
-      ]
+      ],
+      "emoji": "🗂️"
     },
     {
       "tag": "v0.10.0-alpha.1",
@@ -2388,7 +2397,8 @@
           "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/shortcut-keycaps-after.png",
           "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/verification/shortcut-keycaps.md"
         }
-      ]
+      ],
+      "emoji": "▶️"
     },
     {
       "tag": "v0.11.0-alpha.1",
@@ -2567,7 +2577,8 @@
           "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/sidebar-panel-after.png",
           "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/verification/sidebar-panel-recovery.md"
         }
-      ]
+      ],
+      "emoji": "🧰"
     }
   ]
 }

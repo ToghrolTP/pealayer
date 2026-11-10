@@ -9,6 +9,17 @@ import { execFileSync } from 'node:child_process';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const history = JSON.parse(readFileSync(resolve(root, 'docs/releases/history.json'), 'utf8'));
 const changelog = readFileSync(resolve(root, 'CHANGELOG.md'), 'utf8');
+const template = readFileSync(resolve(root, 'docs/releases/TEMPLATE.md'), 'utf8');
+const sectionHeadings = [
+  '## ✨ Added and implemented',
+  '## 🛠️ Fixes and improvements',
+  '## 🧪 Experimental features and later follow-ups',
+  '## 🐞 Bugs and problems in this build',
+  '## 📦 Packages and verification',
+  '## 📸 Screenshots',
+  '## 🔗 Pull requests and issues',
+];
+for (const heading of sectionHeadings) assert(template.includes(heading), `Release template: missing ${heading}`);
 const checkGit = process.argv.includes('--git');
 const seenPrs = new Set();
 const tags = new Set();
@@ -35,13 +46,14 @@ for (const release of history.releases) {
   }
   ancestor(release.sha, history.currentPinnedSource);
   const notes = readFileSync(resolve(root, release.notes), 'utf8');
-  assert(notes.includes(`# Pealayer ${release.tag} `));
+  assert.match(release.emoji, /\p{Extended_Pictographic}/u, `${release.tag}: missing milestone emoji`);
+  assert.equal(notes.split(/\r?\n/, 1)[0], `# ${release.emoji} Pealayer ${release.tag} — ${release.title}`);
   assert(notes.includes(`/commit/${release.sha}`));
-  for (const required of ['[Added]', '[Fixed]', '[Experimental]', '[Known issue]', '## Bugs and problems in this build', '## Packages and verification', '## Screenshots', '## Pull requests and issues']) {
+  for (const required of ['[Added]', '[Fixed]', '[Experimental]', '[Known issue]', ...sectionHeadings]) {
     assert(notes.includes(required), `${release.tag}: missing ${required}`);
   }
   assert(notes.includes(`<!-- pealayer-release-backfill:${release.tag} -->`));
-  assert(changelog.includes(`## ${release.tag} `));
+  assert(changelog.includes(`## ${release.emoji} ${release.tag} `));
   assert(release.screenshots.length > 0);
   for (const shot of release.screenshots) {
     assert(!shot.path.includes('..'));
