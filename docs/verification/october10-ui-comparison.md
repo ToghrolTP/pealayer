@@ -1,4 +1,9 @@
-# October 10 egui Dock comparison
+# v0.5.0-alpha.1 egui Dock comparison
+
+Version identity: [v0.5.0-alpha.1](../releases/v0.5.0-alpha.1.md), source
+`ad4b466fbe40e4556edf4bd9594d3f4eb468329c`. The October 10 date below is
+historical context, not the build's product version. Original captures, filenames,
+hashes and launchers are preserved.
 
 An actual full application build, retained for the user's ongoing UI review.
 This is not today's application restyled to impersonate an older release.

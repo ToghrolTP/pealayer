@@ -1,5 +1,10 @@
 # Pealayer's interface evolution
 
+The [chronological version index](README.md) now assigns the preserved captures
+to their actual source milestones. In particular, the previously date-named
+October 10 comparison is **v0.5.0-alpha.1**; it is not a picture of v0.1.0 or
+v0.2.0. Each version's notes embed its images and link native/Web provenance.
+
 These are genuine captures already preserved with the feature work. They show
 intermediate development states, not proof that an older release contains a
 later interface. They are not newly generated screenshots or final milestone
