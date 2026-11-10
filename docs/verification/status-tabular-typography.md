@@ -13,6 +13,17 @@ and size, for the number baseline. The icon shares that vertical center. No
 face-specific Y offset or font-size increase is applied. FPS stays regular and
 at most 11 points, with three-digit reservation and growth for larger values.
 
+The status bar now lays out the digits and `fps` on one baseline. The earlier
+split paint centered the letters by their own ink and moved the unit two
+physical pixels above its baseline in the Windows comparison. Both captures
+use Studio dark, the same paused 24 FPS sample, and 150% Windows scaling.
+The glyph center of the value is within half a physical pixel of the icon in
+both captures. The after capture uses the clean `339d39e` build.
+
+![Before the shared FPS baseline](../screenshots/status-fps-baseline-before.png)
+
+![FPS number and unit on the same baseline](../screenshots/status-fps-baseline-after.png)
+
 `ui::numeric_text` gives digits equal advances while keeping letters and ordinary
 words proportional and preserving logical/copy text. Native egui's pinned
 TextFormat supports variation axes but **does not expose OpenType feature
