@@ -61,6 +61,12 @@ impl PealayerApp {
     }
     pub(crate) fn document_request(&mut self,ctx:&egui::Context,request:Request)->Result<Value,String> {
         if crate::peer::active() { return Err("Document operations belong to the connected Pealayer authority".into()); }
+        let mut result = self.handle_document_request(ctx, request)?;
+        result["owner_id"] = Value::String(crate::peer::instance_id().into());
+        Ok(result)
+    }
+
+    fn handle_document_request(&mut self, ctx: &egui::Context, request: Request) -> Result<Value, String> {
         match request {
             Request::Validate {document}=>{document.validate()?;Ok(json!({"document":document}))},
             Request::Snapshot=>Ok(json!({"document":Document::Project(self.capture_project(ctx)),"path":self.project.path,"staged_scene":self.project.scene,"scene_operation":self.scene_report()})),

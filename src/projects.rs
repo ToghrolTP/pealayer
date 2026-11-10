@@ -190,6 +190,16 @@ pub enum Request {
     },
 }
 
+impl Request {
+    pub(crate) fn mutates_authority(&self) -> bool {
+        matches!(
+            self,
+            Self::Write { .. } | Self::Load { .. } | Self::Stage { .. }
+                | Self::ApplyScene { .. } | Self::CancelScene { .. }
+        )
+    }
+}
+
 pub(crate) fn rpc_payload(payload:&str,web:bool)->Option<String> {
     let value:serde_json::Value=serde_json::from_str(payload).ok()?;
     let request=if value.get("method").and_then(|v|v.as_str())==Some("pealayer.documents") {value.get("params").cloned().unwrap_or_default()}

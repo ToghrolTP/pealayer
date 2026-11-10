@@ -904,6 +904,13 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
     if let Some(capability) = denied_web_capability(&request.method, path, &web) {
         return permission_denied(capability);
     }
+    if path == "/api/peer/documents"
+        && query_value(&request.target, "owner_id").is_some_and(|id| id != crate::peer::instance_id())
+    {
+        return HttpResponse::json(409, "Conflict", serde_json::json!({
+            "error": "Document authority changed. Read or capture from the new authority before applying changes."
+        }).to_string());
+    }
     if path.starts_with("/api/assets/upload") && query_value(&request.target,"owner_id").is_some_and(|id|id != crate::peer::instance_id()) {
         return HttpResponse::json(409,"Conflict",serde_json::json!({"error":"Asset session owner changed; retry the transfer"}).to_string());
     }

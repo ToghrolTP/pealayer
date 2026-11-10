@@ -21,6 +21,7 @@ export function ProjectDialog({ base, locale, onClose }: { base: string; locale:
   const [selectedOutputs, setSelectedOutputs] = useState<string[]>([]);
   const [sceneReport, setSceneReport] = useState<any>(null);
   const [documentBase, setDocumentBase] = useState(base);
+  const [documentOwner, setDocumentOwner] = useState('');
   const currentBase = useRef(base); currentBase.current = base;
   const applying = sceneReport?.status === 'running';
   const [busy, setBusy] = useState(false);
@@ -35,7 +36,8 @@ export function ProjectDialog({ base, locale, onClose }: { base: string; locale:
   };
   async function request(value: object) {
     const operation = (value as { operation?: string }).operation;
-    if (documentBase !== base && !['read', 'snapshot', 'capture_scene', 'validate', 'scene_status'].includes(operation ?? '')) {
+    const writesAuthority = ['write', 'load', 'stage', 'apply_scene', 'cancel_scene'].includes(operation ?? '');
+    if (writesAuthority && (documentBase !== base || !documentOwner)) {
       setError('Authority changed. Read or capture from the selected authority before changing its session or files.'); return null;
     }
     if (['read', 'snapshot', 'capture_scene', 'validate'].includes(operation ?? '') && document && JSON.stringify(selected()) !== baseline && !discard) {
@@ -44,11 +46,12 @@ export function ProjectDialog({ base, locale, onClose }: { base: string; locale:
     }
     setBusy(true); setError(''); setNotice('');
     try {
-      const response = await fetch(`${base}/api/peer/documents`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
+      const query = writesAuthority ? `?${new URLSearchParams({ owner_id: documentOwner })}` : '';
+      const response = await fetch(`${base}/api/peer/documents${query}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
       const result = await response.json();
       if (currentBase.current !== base) return null;
       if (!response.ok || result.error) throw new Error(result.error || `Document request failed (${response.status})`);
-      if (result.document) { setDocumentBase(base); setConfirmOutputs(false); setSelectedOutputs([]); setDocument(result.document); setBaseline(JSON.stringify(result.document)); setInclude(all); }
+      if (result.document) { setDocumentBase(base); setDocumentOwner(typeof result.owner_id === 'string' ? result.owner_id : ''); setConfirmOutputs(false); setSelectedOutputs([]); setDocument(result.document); setBaseline(JSON.stringify(result.document)); setInclude(all); }
       if ('scene_operation' in result) { setSceneReport(result.scene_operation); setConfirmOutputs(false); }
       if (typeof result.path === 'string') setPath(result.path);
       if (result.saved) { setBaseline(JSON.stringify(selected())); setNotice('Saved on the Pealayer authority.'); }

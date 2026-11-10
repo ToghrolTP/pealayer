@@ -9,6 +9,7 @@ struct Editor {
     error:Option<String>, notice:Option<String>, candidates:Vec<PathBuf>,
     discard:bool, confirm_outputs:bool, busy:bool,
     selected:std::collections::BTreeSet<String>,
+    authority: Option<uuid::Uuid>,
     scene_report:Option<serde_json::Value>,
     next_scene_poll:std::time::Instant,
     reply:Arc<Mutex<Option<Result<serde_json::Value,String>>>>,
@@ -19,7 +20,7 @@ pub(crate) fn busy(ctx:&egui::Context)->bool {ctx.data_mut(|d|d.get_temp::<Edito
 pub(crate) fn open(app:&PealayerApp,ctx:&egui::Context) {
     if ctx.data_mut(|d|d.get_temp::<Editor>(id())).is_some() {return;}
     let document=Document::Project(app.capture_project(ctx));
-    let state=Editor {baseline:document.clone(),document,path:app.project.path.as_ref().map(|p|p.to_string_lossy().into_owned()).unwrap_or_default(),include:Components::default(),error:None,notice:None,candidates:vec![],discard:false,confirm_outputs:false,busy:false,selected:Default::default(),scene_report:None,next_scene_poll:std::time::Instant::now(),reply:Arc::new(Mutex::new(None))};
+    let state=Editor {baseline:document.clone(),document,path:app.project.path.as_ref().map(|p|p.to_string_lossy().into_owned()).unwrap_or_default(),include:Components::default(),error:None,notice:None,candidates:vec![],discard:false,confirm_outputs:false,busy:false,selected:Default::default(),authority:None,scene_report:None,next_scene_poll:std::time::Instant::now(),reply:Arc::new(Mutex::new(None))};
     let mut state=state;
     state.scene_report=app.project.scene_operation.as_ref().map(|op|serde_json::json!(op.report()));
     ctx.data_mut(|d|d.insert_temp(id(),state));
@@ -32,21 +33,33 @@ pub(crate) fn open_candidates(ctx:&egui::Context,candidates:Vec<PathBuf>,error:O
         return;
     }
     let document=Document::Project(Project::default());
-    ctx.data_mut(|d|d.insert_temp(id(),Editor {baseline:document.clone(),document,path:candidates.first().map(|p|p.to_string_lossy().into_owned()).unwrap_or_default(),include:Components::default(),error,notice:None,candidates,discard:false,confirm_outputs:false,busy:false,selected:Default::default(),scene_report:None,next_scene_poll:std::time::Instant::now(),reply:Arc::new(Mutex::new(None))}));
+    ctx.data_mut(|d|d.insert_temp(id(),Editor {baseline:document.clone(),document,path:candidates.first().map(|p|p.to_string_lossy().into_owned()).unwrap_or_default(),include:Components::default(),error,notice:None,candidates,discard:false,confirm_outputs:false,busy:false,selected:Default::default(),authority:None,scene_report:None,next_scene_poll:std::time::Instant::now(),reply:Arc::new(Mutex::new(None))}));
 }
 fn queue_remote(ctx:&egui::Context,request:Request) {
     let Some(client)=crate::peer::client().cloned() else {return};
     let Some(mut editor)=ctx.data_mut(|d|d.get_temp::<Editor>(id())) else {return};
+    let endpoint = if request.mutates_authority() {
+        let observed = client.snapshot().and_then(|state| uuid::Uuid::parse_str(&state.session.instance_id).ok());
+        let Some(owner) = editor.authority.filter(|owner| Some(*owner) == observed) else {
+            editor.error = Some("Document authority changed. Read or capture from the new authority before applying changes.".into());
+            editor.confirm_outputs = false;
+            ctx.data_mut(|data| data.insert_temp(id(), editor));
+            return;
+        };
+        format!("/api/peer/documents?owner_id={owner}")
+    } else {
+        "/api/peer/documents".into()
+    };
     editor.busy=true;let reply=editor.reply.clone();ctx.data_mut(|d|d.insert_temp(id(),editor));
     let ctx=ctx.clone();
-    std::thread::spawn(move||{let result=client.post("/api/peer/documents",&serde_json::to_value(request).unwrap());if let Ok(mut r)=reply.lock(){*r=Some(result);}ctx.request_repaint();});
+    std::thread::spawn(move||{let result=client.post(&endpoint,&serde_json::to_value(request).unwrap());if let Ok(mut r)=reply.lock(){*r=Some(result);}ctx.request_repaint();});
 }
 fn accept(editor:&mut Editor,result:Result<serde_json::Value,String>) {
     editor.busy=false;
     match result {
         Ok(value)=>{
             if let Some(document)=value.get("document") {match serde_json::from_value::<Document>(document.clone()) {
-                Ok(document)=>{if let Err(error)=document.validate(){editor.error=Some(error);return;}editor.confirm_outputs=false;editor.selected.clear();editor.baseline=document.clone();editor.document=document;editor.include=Components::default();},Err(e)=>{editor.error=Some(e.to_string());return;}
+                Ok(document)=>{if let Err(error)=document.validate(){editor.error=Some(error);return;}editor.authority=value["owner_id"].as_str().and_then(|owner|uuid::Uuid::parse_str(owner).ok());editor.confirm_outputs=false;editor.selected.clear();editor.baseline=document.clone();editor.document=document;editor.include=Components::default();},Err(e)=>{editor.error=Some(e.to_string());return;}
             }}
             if let Some(report)=value.get("scene_operation") {editor.scene_report=(!report.is_null()).then(||report.clone());editor.next_scene_poll=std::time::Instant::now()+std::time::Duration::from_millis(500);editor.confirm_outputs=false;}
             if let Some(path)=value.get("path").and_then(|p|p.as_str()) {editor.path=path.into();}

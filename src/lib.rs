@@ -18,7 +18,6 @@ pub mod messaging;
 pub mod mpv;
 pub mod network;
 pub mod peer;
-pub mod projects;
 mod app_projects;
 mod scene_apply;
 pub mod performance;
