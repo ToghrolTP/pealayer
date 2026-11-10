@@ -82,6 +82,27 @@ hover-thumbnail, responsive footer, workspace/sidebar and palette regressions re
 - Native release compilation and isolated DLL smoke test passed. The seven
   QuickAction icon resources were checked in the preceding review build.
 
+### Reconciliation with subsequent main changes
+
+`56479d9` merges main `7547b97` without rewriting either history. Both conflicting
+additions were retained: the FilmCraft Preferences preservation test alongside
+the newer workspace-tools tests, and both acceptance-note sections. New terminal,
+rail, typography and release-history work remains present. GitHub subsequently
+reported the PR mergeable, still draft and unmerged.
+
+After that merge, all **eight** current Web appearance tests, 53 parity contracts
+and control-bar contracts passed. The native suite did **not** run: rustc/LLVM
+failed during compilation with `out of memory`/allocation failure, accompanied by
+a Windows pagefile-limit error. TypeScript's native executable also could not
+start (`spawnSync ... UNKNOWN`). These are explicit post-merge verification
+blockers, not passing test results. No pagefile/settings changes, process kills
+or further heavyweight builds were used to work around resource pressure.
+
+The gallery below remains the inspected FilmCraft-restoration checkpoint,
+accurately identified in each manifest; it is not relabeled as a capture of the
+subsequent main integration. Before merge approval, rerun native/TypeScript
+checks and build/capture the integrated head when resources are available.
+
 ### Review identity and packaging limit
 
 The inspected executable is source `f2e08c0c2a15a5563246862e293d549f9a668b17`,
