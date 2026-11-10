@@ -10,6 +10,14 @@ statements are not the present product state.
 
 ## Publication and workspace tools checkpoint
 
+[Shared Terminal and Pealayer Shell](terminal-host-experience.md) adds the real
+Preferences catalog, readable labels and choices, prompt-safe structured reports,
+live status and decoder-confirmed command results. Native/Web integration checks
+and actual checkpoint captures are recorded there. Final-package launch is
+tool-policy blocked and awaits the requested isolated launcher command; PR #281
+remains draft for final runtime/capture and hosted-platform gates. Other running
+instances and user-deferred Cafe deployment remain unchanged.
+
 [Proportional numeric status typography](status-tabular-typography.md) fixes the
 FPS icon/digit-center mismatch, bundles Inter for Windows and shares tabular
 digit layout without requiring a monospace font. All 59 focused native tests and

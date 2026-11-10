@@ -146,3 +146,61 @@ Terminal only (no private media). Production captures/transcripts/access keys st
 outside Git. Hosted platform checks, user acceptance and production deployment
 are separate from source verification. Cafe remains unavailable at the user's
 request; no tunnel/service or production hardware is changed by this pass.
+
+### Actual native and Web checkpoint captures
+
+These are real application captures, not the upstream gallery or a mockup.
+The native crops preserve pixels at the same 1120 × 875 size, palette, window
+geometry and 98-column Terminal viewport. Only the Terminal area is included.
+
+| Initial review | Live integration checkpoint |
+| --- | --- |
+| ![Initial technical-key table and white active outline](../screenshots/terminal-table-before.png) | ![Readable real settings, live accent and working choice popup](../screenshots/terminal-table-checkpoint.png) |
+
+The initial capture is from `45b6e8e72efd2275b80c5d17a0ef7ec4d7ecbf15`.
+The integration captures are from clean packaged/runtime source
+`2775659d475a8cff14f4c988d6da2ca6f156d8ae`. Appearance has 23 entries;
+the complete catalog spans eight pages, not just the visible rows. Private
+settings stay locked to their native editor. The repeated Interface headings
+visible in this checkpoint were subsequently consolidated in source.
+
+![Actual paired Web view](../screenshots/terminal-web-checkpoint.png)
+
+[Actual 390-pixel Web view](../screenshots/terminal-web-phone-checkpoint.png)
+keeps the host's same session/grid; its contained horizontal scrolling is
+intentional, not a separate browser-owned shell or a host resize.
+
+### Verification and final-package gate
+
+- Latest focused source checks: 58 Terminal tests, 15 embedded-host tests and
+  three status tests pass. Two opt-in OS-PTY cases remain ignored. The specific
+  native Preferences provenance and invalid-config API CI failures also pass
+  their repaired local checks.
+- TypeScript, keyboard codec, 53 Web parity contracts and responsive guardrails
+  pass. Actual Edge pairing, UI session creation, ordered setting edits/readback,
+  shared table, desktop/phone containment, no credential storage and viewer
+  disconnect without closing the host session pass.
+- Actual native/HTTP checks pass owner/session identity, get/set persistence,
+  readable/key switching, choice popup, default shell denial, policy escalation
+  denial, invalid IDs, origin isolation, private-screen isolation and revocation.
+- The isolated decoder accepted volume/mute, pause, exact seek, play and Stop,
+  with actual confirmations rather than dispatch-only success. Test media was a
+  muted public synthetic fixture; no board/output action was sent.
+- Visual review discovered a one-frame stale immediate status report. The final
+  source reconciles actual decoder observations and adds a regression. It also
+  groups settings contiguously and consumes the owner's framed-dialog update.
+- Final clean package source:
+  `b3b26d791366e8617458b15a4b0f09dda75f7315`; executable SHA-256:
+  `9401ff393fc839743911d2f5a91c4be2da299a024cd2c0886d5c624d81ae9dd0`.
+  Native/downloader smoke, PWA integrity and Windows resource checks pass.
+  **Its launch was blocked by tool policy. Final-build runtime/captures remain
+  pending the requested isolated launcher command; the images above are not
+  claimed as final-build evidence.**
+- PR [#281](https://github.com/ToghrolTP/pealayer/pull/281) stays draft until that
+  final native/Web gate and hosted platform checks finish. CodeQL's two browser
+  test findings were fixed by passing data as CDP arguments, then replied to and
+  resolved. No failure or required check is bypassed.
+- Only review-only sessions were discarded under explicit permission. Regular
+  Pealayer, Workspace Tools and the historical comparison remain untouched.
+  Canonical production replacement, Cafe deployment and human acceptance are not
+  inferred from an isolated review, source tests or a package smoke check.
