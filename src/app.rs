@@ -660,6 +660,8 @@ pub struct PealayerApp {
     pub(crate) playback_rate: f64,
     pub(crate) configured_playback_speed: f64,
     pub(crate) temporary_fast_forward_speed: f64,
+    pub(crate) double_click_interval_ms: u32,
+    pub(crate) hold_fast_forward_wait_for_double_click: bool,
     pub(crate) video_surface_gesture: Option<crate::ui::video::VideoSurfaceGesture>,
     pub(crate) mouse_bindings: crate::pointer_bindings::Bindings,
 
@@ -7671,6 +7673,8 @@ impl PealayerApp {
         cfg.video_click_frame_only = self.video_click_frame_only;
         cfg.playback_speed = self.configured_playback_speed;
         cfg.temporary_fast_forward_speed = self.temporary_fast_forward_speed;
+        cfg.double_click_interval_ms = self.double_click_interval_ms;
+        cfg.hold_fast_forward_wait_for_double_click = self.hold_fast_forward_wait_for_double_click;
         cfg.subtitle_font_size = self.sub_font_size;
         cfg.numeric_input_steps = self.numeric_input_steps.clone();
         cfg.subtitle_delay_seconds = self.sub_delay;
@@ -8065,6 +8069,8 @@ impl PealayerApp {
         self.video_click_frame_only = config.video_click_frame_only;
         self.configured_playback_speed = config.playback_speed;
         self.temporary_fast_forward_speed = config.temporary_fast_forward_speed;
+        self.double_click_interval_ms = config.double_click_interval_ms;
+        self.hold_fast_forward_wait_for_double_click = config.hold_fast_forward_wait_for_double_click;
         if self.video_surface_gesture.is_none() {
             let _ = self
                 .mpv
@@ -10269,6 +10275,8 @@ impl Default for PealayerApp {
             playback_rate: 1.0,
             configured_playback_speed: 1.0,
             temporary_fast_forward_speed: 2.0,
+            double_click_interval_ms: crate::config::AppConfig::default().double_click_interval_ms,
+            hold_fast_forward_wait_for_double_click: true,
             video_surface_gesture: None,
             mouse_bindings: Default::default(),
             seek_pos: None,

@@ -93,7 +93,6 @@ pub(crate) struct VideoSurfaceGesture {
     pub(crate) start_rate: f64,
     pub(crate) was_paused: bool,
     pub(crate) target_time: f64,
-    pub(crate) started_at: std::time::Instant,
     pub(crate) dragged: bool,
 }
 
@@ -106,16 +105,6 @@ fn temporary_fast_forward_rate(start_rate: f64, configured_rate: f64, drag_delta
     // can then increase the configured temporary rate without changing the
     // persisted normal playback speed. Never slow an already-faster session.
     (configured_rate.max(start_rate) + drag_delta_x.abs() as f64 / 160.0).clamp(1.0, 16.0)
-}
-
-fn should_consume_gesture_click(
-    action: crate::config::PlayerDragAction,
-    dragged: bool,
-    held_for: std::time::Duration,
-) -> bool {
-    dragged
-        || (action == crate::config::PlayerDragAction::TemporaryFastForward
-            && held_for >= std::time::Duration::from_millis(180))
 }
 
 fn gesture_action_for_button(
@@ -136,10 +125,26 @@ fn gesture_action_for_button(
 #[derive(Clone,Copy)]
 struct VideoPress {
     source: u64,
-    started_at:std::time::Instant,
+    started_at: f64,
+    hold_delay: f64,
     button:egui::PointerButton, origin:egui::Pos2, moved:bool,
     click:crate::config::PlayerClickAction, drag:crate::config::PlayerDragAction,
     force_menu:bool, modifier_drag:bool,
+}
+
+#[derive(Clone, Copy)]
+struct VideoClick {
+    source: u64,
+    time: f64,
+    position: egui::Pos2,
+}
+
+impl VideoClick {
+    fn follows(self, previous: Self, interval: f64, max_distance: f32) -> bool {
+        self.source == previous.source
+            && (0.0..interval).contains(&(self.time - previous.time))
+            && self.position.distance_sq(previous.position) < max_distance * max_distance
+    }
 }
 
 fn media_identity(app:&PealayerApp)->u64 {
@@ -187,7 +192,6 @@ fn begin_video_surface_gesture(
     app: &mut PealayerApp,
     button: egui::PointerButton,
     action: crate::config::PlayerDragAction,
-    started_at:std::time::Instant,
 ) {
     if app.video_surface_gesture.is_some() {
         return;
@@ -200,7 +204,6 @@ fn begin_video_surface_gesture(
         start_rate: app.playback_rate,
         was_paused: app.is_paused,
         target_time: app.playback_time,
-        started_at,
         dragged: false,
     };
     app.video_surface_gesture = Some(gesture);
@@ -252,11 +255,7 @@ fn finish_video_surface_gesture(app: &mut PealayerApp) -> bool {
         }
         crate::config::PlayerDragAction::MoveWindow | crate::config::PlayerDragAction::None => {}
     }
-    should_consume_gesture_click(
-        gesture.action,
-        gesture.dragged,
-        gesture.started_at.elapsed(),
-    )
+    gesture.dragged || gesture.action == crate::config::PlayerDragAction::TemporaryFastForward
 }
 
 /// Release a captured hold even when its panel disappeared before mouse-up.
@@ -465,33 +464,53 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         perform_pointer_action(app,ui.ctx(),action);
     }
     let press_id=response.id.with("pointer-press-policy");
-    let mut press=ui.ctx().data_mut(|d|d.get_temp::<VideoPress>(press_id));
+    let click_id = response.id.with("previous-primary-video-click");
+    let (mut press, mut previous_click) = ui.ctx().data(|data| (
+        data.get_temp::<VideoPress>(press_id),
+        data.get_temp::<VideoClick>(click_id).filter(|click| click.source == source),
+    ));
+    let now = ui.input(|input| input.time);
+    let double_click_interval = f64::from(app.double_click_interval_ms) / 1_000.0;
+    let hold_delay = if app.hold_fast_forward_wait_for_double_click {
+        double_click_interval
+    } else {
+        0.180
+    };
     if press.is_some_and(|p|p.source!=source || !ui.input(|i|i.pointer.button_down(p.button)||i.pointer.button_released(p.button))) {press=None;}
     let events=ui.input(|i|i.events.clone());
     for event in events {match event {
         egui::Event::PointerButton{pos,button,pressed:true,modifiers}
             if GESTURE_BUTTONS.contains(&button) && response.contains_pointer() && gesture_rect.contains(pos) && (press.is_none()||press.is_some_and(|p|p.button==button))=>{
                 let (click,drag,force_menu,modifier_drag)=video_pointer_policy(app,button,modifiers);
-                press=Some(VideoPress{source,started_at:std::time::Instant::now(),button,origin:pos,moved:false,click,drag,force_menu,modifier_drag});
+                if button != egui::PointerButton::Primary || modifier_drag {
+                    previous_click = None;
+                }
+                press=Some(VideoPress{source,started_at:now,hold_delay,button,origin:pos,moved:false,click,drag,force_menu,modifier_drag});
             }
+        egui::Event::PointerButton { pressed: true, .. } => previous_click = None,
         egui::Event::PointerMoved(pos)=>{if let Some(p)=&mut press {p.moved|=p.origin.distance(pos)>=6.0;}},
-        egui::Event::WindowFocused(false)=>{press=None;},
-        egui::Event::Key{key:egui::Key::Escape,pressed:true,..}=>{press=None;if app.video_surface_gesture.is_some(){finish_video_surface_gesture(app);}},
+        egui::Event::WindowFocused(false)=>{press=None;previous_click=None;},
+        egui::Event::Key{key:egui::Key::Escape,pressed:true,..}=>{
+            press=None;
+            previous_click=None;
+            if app.video_surface_gesture.is_some(){finish_video_surface_gesture(app);}
+        },
         _=>{}
     }}
     let press_action=|button|press.filter(|p|p.button==button).map(|p|p.drag).unwrap_or(crate::config::PlayerDragAction::None);
 
     if app.current_video_path.is_some() && app.video_surface_gesture.is_none() {
-        // A hold activates after 180 ms (or deliberate movement), so an ordinary
-        // click never briefly alters playback speed before opening its menu.
+        // A stationary hold waits; deliberate movement starts the gesture immediately.
         for button in GESTURE_BUTTONS {
             let action = press_action(button);
             if let Some(p)=press.filter(|p|p.button==button && ui.input(|i|i.pointer.button_down(button)))
                 && action == crate::config::PlayerDragAction::TemporaryFastForward {
-                let threshold=std::time::Duration::from_millis(180);
-                if p.moved || p.started_at.elapsed()>=threshold {
-                    begin_video_surface_gesture(app, button, action,p.started_at);
-                } else {ui.ctx().request_repaint_after(threshold.saturating_sub(p.started_at.elapsed()));}
+                let remaining = p.hold_delay - (now - p.started_at);
+                if p.moved || remaining <= 0.0 {
+                    begin_video_surface_gesture(app, button, action);
+                } else {
+                    ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(remaining));
+                }
             }
         }
     }
@@ -502,7 +521,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 let action = press_action(button);
                 let horizontal=press.is_some_and(|p|ui.input(|i|i.pointer.latest_pos().is_some_and(|pos|(pos.x-p.origin.x).abs()>=6.0)));
                 if action != crate::config::PlayerDragAction::None && (action!=crate::config::PlayerDragAction::Seek||horizontal&&app.is_seekable&&app.duration.is_finite()&&app.duration>0.0) && (app.current_video_path.is_some() || action==crate::config::PlayerDragAction::MoveWindow) {
-                    begin_video_surface_gesture(app, button, action,press.unwrap().started_at);
+                    begin_video_surface_gesture(app, button, action);
                     if action == crate::config::PlayerDragAction::Seek {
                         app.scrub_to(app.playback_time);
                     }
@@ -564,22 +583,34 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let mut pointer_menu=false;
     if let Some(p)=released {
         let inside=ui.rect_contains_pointer(gesture_rect);
-        let primary_id=response.id.with("previous-primary-click-eligible");
-        let previous_primary=ui.ctx().data(|d|d.get_temp::<bool>(primary_id)).unwrap_or(false);
+        let previous = previous_click.take();
         if p.force_menu && inside {pointer_menu=true;}
         else if !suppress_click && !p.moved && response.clicked_by(p.button) {
-            if p.button==egui::PointerButton::Primary && !p.modifier_drag && previous_primary && response.double_clicked_by(p.button) && app.current_video_path.is_some() {
-                app.toggle_fullscreen(ui.ctx());
-            } else if p.button==egui::PointerButton::Primary && !p.modifier_drag && app.current_video_path.is_none() {
+            let primary = p.button == egui::PointerButton::Primary && !p.modifier_drag;
+            if primary && app.current_video_path.is_none() {
                 app.open_media_file_dialog(ui.ctx());
+            } else if primary {
+                let position = ui.input(|input| input.pointer.latest_pos()).unwrap_or(p.origin);
+                let click = VideoClick { source, time: now, position };
+                let max_distance = ui.ctx().options(|options| options.input_options.max_click_dist);
+                if previous.is_some_and(|previous| click.follows(previous, double_click_interval, max_distance)) {
+                    app.toggle_fullscreen(ui.ctx());
+                } else {
+                    previous_click = Some(click);
+                    perform_video_surface_click(app,ui.ctx(),p.click);
+                }
             } else if p.click==crate::config::PlayerClickAction::ContextMenu {pointer_menu=true;}
             else {perform_video_surface_click(app,ui.ctx(),p.click);}
         }
-        if p.button==egui::PointerButton::Primary {ui.ctx().data_mut(|d|d.insert_temp(primary_id,!suppress_click&&!p.moved&&!p.modifier_drag));}
         press=None;
     }
     if press.is_some_and(|p|!ui.input(|i|i.pointer.button_down(p.button))){press=None;}
-    ui.ctx().data_mut(|d|{if let Some(p)=press {d.insert_temp(press_id,p);}else{d.remove::<VideoPress>(press_id);}});
+    ui.ctx().data_mut(|data| {
+        if let Some(press) = press { data.insert_temp(press_id, press); }
+        else { data.remove::<VideoPress>(press_id); }
+        if let Some(click) = previous_click { data.insert_temp(click_id, click); }
+        else { data.remove::<VideoClick>(click_id); }
+    });
 
     if response.hovered() {
         let scroll = ui.input(|i| {
@@ -1457,7 +1488,10 @@ mod tests {
         pointer_frame(&mut app,&ctx,&mut time,vec![]);pointer_frame(&mut app,&ctx,&mut time,vec![]);
         pointer_frame(&mut app,&ctx,&mut time,vec![egui::Event::PointerMoved(pos),mouse(pos,egui::PointerButton::Secondary,true,egui::Modifiers::NONE)]);
         assert!(app.video_surface_gesture.is_none());assert!(app.is_paused);
-        std::thread::sleep(std::time::Duration::from_millis(190));
+        time += 0.15;
+        pointer_frame(&mut app,&ctx,&mut time,vec![]);
+        assert!(app.video_surface_gesture.is_none());assert!(app.is_paused);
+        time += 0.10;
         pointer_frame(&mut app,&ctx,&mut time,vec![]);
         assert!(app.video_surface_gesture.is_some());assert!(!app.is_paused);
         let mut output=ctx.run_ui(egui::RawInput{events:vec![mouse(pos,egui::PointerButton::Secondary,false,egui::Modifiers::NONE)],..Default::default()},|ui|finish_released_gesture(&mut app,ui.ctx()));
@@ -1467,7 +1501,7 @@ mod tests {
     #[test]
     fn a_source_change_revokes_the_old_hold_without_pausing_or_seeking_the_new_media() {
         let _guard=crate::app::tests::lock_app_tests();let ctx=egui::Context::default();let mut app=mouse_fixture();
-        begin_video_surface_gesture(&mut app,egui::PointerButton::Secondary,crate::config::PlayerDragAction::TemporaryFastForward,std::time::Instant::now());
+        begin_video_surface_gesture(&mut app,egui::PointerButton::Secondary,crate::config::PlayerDragAction::TemporaryFastForward);
         app.current_video_path=Some("different-pointer-fixture.mp4".into());app.is_paused=false;
         finish_released_gesture(&mut app,&ctx);
         assert!(app.video_surface_gesture.is_none());assert!(!app.is_paused);
@@ -1645,26 +1679,35 @@ mod tests {
     }
 
     #[test]
-    fn fast_forward_hold_does_not_turn_release_into_play_pause_click() {
-        assert!(!should_consume_gesture_click(
-            crate::config::PlayerDragAction::TemporaryFastForward,
-            false,
-            std::time::Duration::from_millis(50),
-        ));
-        assert!(should_consume_gesture_click(
-            crate::config::PlayerDragAction::TemporaryFastForward,
-            false,
-            std::time::Duration::from_millis(250),
-        ));
-        assert!(should_consume_gesture_click(
-            crate::config::PlayerDragAction::TemporaryFastForward,
-            true,
-            std::time::Duration::ZERO,
-        ));
-        assert!(should_consume_gesture_click(
-            crate::config::PlayerDragAction::Seek,
-            true,
-            std::time::Duration::ZERO,
-        ));
+    fn configured_video_double_click_beats_the_hold_and_respects_its_opt_out() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for wait in [true, false] {
+            let ctx = egui::Context::default();
+            let mut app = mouse_fixture();
+            app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+            app.double_click_interval_ms = 500;
+            app.hold_fast_forward_wait_for_double_click = wait;
+            let mut time = 0.0;
+            let position = egui::pos2(400.0, 300.0);
+            let click = |pressed| mouse(position, egui::PointerButton::Primary, pressed, egui::Modifiers::NONE);
+            pointer_frame(&mut app, &ctx, &mut time, vec![]);
+            pointer_frame(&mut app, &ctx, &mut time, vec![egui::Event::PointerMoved(position)]);
+            pointer_frame(&mut app, &ctx, &mut time, vec![click(true)]);
+            pointer_frame(&mut app, &ctx, &mut time, vec![click(false)]);
+            assert!(!app.is_paused, "the first click must still play");
+            pointer_frame(&mut app, &ctx, &mut time, vec![click(true)]);
+            time += 0.25;
+            pointer_frame(&mut app, &ctx, &mut time, vec![]);
+            assert_eq!(app.video_surface_gesture.is_none(), wait);
+            let output = pointer_frame(&mut app, &ctx, &mut time, vec![click(false)]);
+            assert!(app.video_surface_gesture.is_none());
+            assert_eq!(app.playback_rate, 1.0);
+            assert!(!app.is_paused, "fullscreen or a consumed hold must leave playback running");
+            assert_eq!(
+                output.viewport_output.values().flat_map(|viewport| &viewport.commands)
+                    .any(|command| matches!(command, egui::ViewportCommand::Fullscreen(true))),
+                wait,
+            );
+        }
     }
 }

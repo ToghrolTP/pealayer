@@ -675,6 +675,8 @@ pub fn run() -> eframe::Result {
                 playback_rate: loaded_config.playback_speed,
                 configured_playback_speed: loaded_config.playback_speed,
                 temporary_fast_forward_speed: loaded_config.temporary_fast_forward_speed,
+                double_click_interval_ms: loaded_config.double_click_interval_ms,
+                hold_fast_forward_wait_for_double_click: loaded_config.hold_fast_forward_wait_for_double_click,
                 video_surface_gesture: None,
                 show_sub_settings: loaded_config.workspace_session.dialogs.subtitles,
                 sub_visibility: true,

@@ -726,6 +726,12 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Player controls" => "کنترل‌های پخش‌کننده",
         "Playback speed" => "سرعت پخش",
         "Hold-to-fast-forward speed" => "سرعت جلورفتن با نگه‌داشتن",
+        "Video double-click interval (ms)" => "فاصلهٔ دوبار کلیک روی ویدیو (میلی‌ثانیه)",
+        "Time between clicks on the native video to toggle fullscreen" =>
+            "فاصلهٔ بین کلیک‌ها روی ویدیو برای تغییر حالت تمام‌صفحه در برنامهٔ رومیزی",
+        "Wait for double-click before fast-forwarding" => "انتظار برای دوبار کلیک پیش از تندپخش",
+        "A stationary hold on native video waits for the double-click interval. Turn off to use 180 ms." =>
+            "با نگه‌داشتن دکمه بدون حرکت، برنامهٔ رومیزی تا پایان زمان دوبار کلیک صبر می‌کند. در حالت خاموش این زمان ۱۸۰ میلی‌ثانیه است.",
         "Normal speed used for playback and restored after a temporary fast-forward" => {
             "سرعت عادی پخش که پس از جلورفتن موقت بازیابی می‌شود"
         }
