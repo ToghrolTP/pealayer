@@ -52,6 +52,8 @@ The [original remote media branch](https://github.com/ToghrolTP/pealayer/tree/ar
 is retained in the project history. See [live media verification](verification/live-media-and-recording-retention.md)
 for the focused timeline checks and the remaining private-source verification.
 
+![Web remote controls with simulated live and seekable media states](screenshots/remote-live-transport.png)
+
 Revoking file access hides the preview source but does not prevent connecting.
 File → Open and project/config import/export use a server-files dialog, not a
 consumer-native picker. Typed paths are server paths. Configuration exports
