@@ -626,6 +626,10 @@ pub struct PealayerApp {
     pub(crate) direction_preference: crate::config::AppDirection,
     pub(crate) theme_preference: crate::config::AppTheme,
     pub(crate) color_palette: crate::config::ColorPalette,
+    pub(crate) native_monitor_style: crate::config::NativeMonitorStyle,
+    pub(crate) native_transport_style: crate::config::NativeMonitorStyle,
+    pub(crate) monitor_preview: crate::config::MonitorPreview,
+    pub(crate) native_timeline_style: crate::config::NativeTimelineStyle,
     pub(crate) rtl: bool,
     pub(crate) mpv: crate::mpv::player::Player,
     pub(crate) mpv_client: Arc<libmpv2::Mpv>,
@@ -5238,6 +5242,10 @@ impl PealayerApp {
             InteropCommand::SetHardwareConnection { connected } => {
                 let endpoint=self.serial_port.trim().to_string();
                 if connected && endpoint.is_empty() {self.set_osd(self.tr("Enter a hardware endpoint before connecting."));return;}
+                if connected && crate::four_d::controller::is_demo_endpoint(&endpoint) {
+                    self.start_virtual_board_demo();
+                    return;
+                }
                 self.connection_notice=None;
                 if self.engine_handle.sender.send(crate::four_d::engine::EngineMessage::ReconfigureEndpoint{endpoint,connect:connected}).is_err() {
                     self.set_osd("Hardware connection engine is unavailable".into());
@@ -7447,32 +7455,51 @@ impl PealayerApp {
 
     pub fn request_hardware_connection(&mut self) {
         let endpoint = self.serial_port.trim().to_owned();
-        if !endpoint.is_empty() {
-            if let Ok(mut selected) = self.engine_handle.serial_port.lock() {
-                *selected = endpoint;
-            }
-            self.connection_notice = None;
-            self.engine_handle.connection_requested.store(
-                true,
-                std::sync::atomic::Ordering::Relaxed,
-            );
-            self.save_config();
+        if endpoint.is_empty() {
+            self.connection_notice = Some(self.tr("Enter a hardware endpoint before connecting."));
+            return;
         }
+        if crate::four_d::controller::is_demo_endpoint(&endpoint) {
+            self.prepare_virtual_board_showcase();
+        }
+        if let Ok(mut selected) = self.engine_handle.serial_port.lock() {
+            *selected = endpoint;
+        }
+        self.connection_notice = None;
+        self.engine_handle.connection_requested.store(
+            true,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        self.save_config();
     }
 
     pub fn start_virtual_board_demo(&mut self) {
-        self.serial_port = crate::four_d::controller::DEMO_ENDPOINT.to_string();
-        if self.current_video_path.is_none() {
-            if let Some(media) = crate::four_d::demo_timeline::demo_media_target() {
-                self.load_media_target(&media.to_string_lossy());
-            }
+        if crate::peer::active() || self.is_connected
+            || self.engine_handle.connection_requested.load(Ordering::Relaxed)
+        {
+            self.set_osd(self.tr("Disconnect the current hardware or remote session before starting the demo."));
+            return;
         }
-        if self.timeline.instances.is_empty() {
+        self.serial_port = crate::four_d::controller::DEMO_ENDPOINT.to_string();
+        self.request_hardware_connection();
+    }
+
+    fn prepare_virtual_board_showcase(&mut self) {
+        if self.current_video_path.is_none() && !self.is_timeline_dirty() {
+            let Some(media) = crate::four_d::demo_timeline::demo_media_target() else {
+                self.set_osd(self.tr("Demo clip unavailable. Open a video to use with the Virtual Board."));
+                return;
+            };
+            // Give the coordinator time to attach before any showcase cue can fire.
+            let _ = self.mpv.set_property("pause", true);
+            self.pending_external_pause = crate::mpv::external::active();
+            self.load_media_target(&media.to_string_lossy());
+            self.pause();
+        }
+        if self.current_video_path.is_some() && self.timeline == crate::four_d::models::Timeline::default() {
             self.timeline = crate::four_d::demo_timeline::build_demo_showcase_timeline();
             self.sync_timeline_engine();
         }
-        self.request_hardware_connection();
-        self.save_config();
     }
 
     fn remote_neighbor(&self, direction: i32, automatic: bool) -> Option<crate::remote_location::Playback> {
@@ -7628,6 +7655,10 @@ impl PealayerApp {
         cfg.color_palette = self.color_palette;
         cfg.local_media_title_format = self.local_media_title_format;
         cfg.remote_media_title_format = self.remote_media_title_format;
+        cfg.native_monitor_style = self.native_monitor_style;
+        cfg.native_transport_style = self.native_transport_style;
+        cfg.monitor_preview = self.monitor_preview;
+        cfg.native_timeline_style = self.native_timeline_style;
         cfg.hardware_endpoint =
             (!self.serial_port.trim().is_empty()).then(|| self.serial_port.clone());
         cfg.auto_connect_hardware = self.auto_connect_hardware;
@@ -8019,6 +8050,10 @@ impl PealayerApp {
         self.color_palette = config.color_palette;
         self.local_media_title_format = config.local_media_title_format;
         self.remote_media_title_format = config.remote_media_title_format;
+        self.native_monitor_style = config.native_monitor_style;
+        self.native_transport_style = config.native_transport_style;
+        self.monitor_preview = config.monitor_preview;
+        self.native_timeline_style = config.native_timeline_style;
         self.serial_port = endpoint.clone();
         self.auto_connect_hardware = config.auto_connect_hardware;
         self.pause_on_hardware_disconnect = config.pause_on_hardware_disconnect;
@@ -10194,6 +10229,10 @@ impl Default for PealayerApp {
             direction_preference: crate::config::AppDirection::Auto,
             theme_preference: crate::config::AppTheme::System,
             color_palette: crate::config::ColorPalette::Native,
+            native_monitor_style: crate::config::NativeMonitorStyle::default(),
+            native_transport_style: crate::config::NativeMonitorStyle::default(),
+            monitor_preview: crate::config::MonitorPreview::default(),
+            native_timeline_style: crate::config::NativeTimelineStyle::default(),
             rtl: crate::config::resolve_rtl(
                 crate::config::AppDirection::Auto,
                 crate::config::resolve_language(crate::config::AppLanguage::System),

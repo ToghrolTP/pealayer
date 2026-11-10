@@ -388,7 +388,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     }
 
     let (rect, _) = ui.allocate_exact_size(video_size, egui::Sense::hover());
-    let aspect_ratio = resolved_video_aspect_ratio(app.video_aspect_ratio);
+    let preview = if app.show_four_d_editor { app.monitor_preview } else { Default::default() };
+    let aspect_ratio = resolved_video_aspect_ratio(preview.aspect.ratio(app.video_aspect_ratio));
     let dest_rect = fitted_video_rect(rect, aspect_ratio);
     let gesture_rect = if app.video_click_frame_only && app.current_video_path.is_some() {
         dest_rect
@@ -811,7 +812,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
     // 2. Calculate DPI-aware physical pixel dimensions
     let ppi = pixels_per_point;
-    let (target_phys_w, target_phys_h) = calculate_physical_bounds(dest_rect, ppi);
+    let (target_phys_w, target_phys_h) = monitor_render_bounds(dest_rect, ppi, preview.resolution);
 
     // Execute the renderer before sampling the shared texture, not one UI paint
     // later. Filling this slot below keeps both the image and OSD above it.
@@ -1298,6 +1299,12 @@ pub fn calculate_physical_bounds(rect: egui::Rect, ppi: f32) -> (i32, i32) {
     (w.max(1), h.max(1))
 }
 
+fn monitor_render_bounds(rect: egui::Rect, ppi: f32, resolution: crate::config::MonitorResolution) -> (i32,i32) {
+    let (w,h) = calculate_physical_bounds(rect,ppi);
+    let divisor = resolution.divisor();
+    ((w/divisor).max(1),(h/divisor).max(1))
+}
+
 fn external_mpv_notice(status: &crate::mpv::external::Status) -> (elegance::CalloutTone, &'static str) {
     if status.error.as_deref().is_some_and(|error| !error.is_empty()) {
         return (elegance::CalloutTone::Danger, "Connection problem");
@@ -1492,6 +1499,17 @@ mod tests {
         }
     }
     use super::*;
+
+    #[test]
+    fn filmcraft_preview_resolution_changes_real_render_size_not_display_geometry() {
+        use crate::config::MonitorResolution as R;
+        let rect=egui::Rect::from_min_size(egui::pos2(10.0,20.0),egui::vec2(640.0,360.0));
+        for (resolution,expected) in [(R::Full,(960,540)),(R::Half,(480,270)),(R::Quarter,(240,135)),(R::Eighth,(120,67))] {
+            assert_eq!(monitor_render_bounds(rect,1.5,resolution),expected);
+        }
+        assert_eq!(rect.size(),egui::vec2(640.0,360.0));
+        assert_eq!(monitor_render_bounds(egui::Rect::ZERO,1.0,R::Eighth),(1,1));
+    }
 
     #[test]
     fn video_renderer_is_scheduled_before_image_and_osd() {

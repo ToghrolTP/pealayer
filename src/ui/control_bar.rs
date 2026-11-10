@@ -708,10 +708,12 @@ mod tests {
     #[test]
     fn monitor_volume_moves_with_speaker_but_slider_gestures_do_not_reorder() {
         let _lock = crate::app::tests::lock_app_tests();
+        for presentation in [crate::config::NativeMonitorStyle::Compact,crate::config::NativeMonitorStyle::FilmCraft] {
         for rtl in [false, true] {
             let ctx = egui::Context::default();
             let mut app = PealayerApp::default();
             app.rtl = rtl;
+            app.native_monitor_style=presentation;
             let simple = app.control_bars.simple;
             let surface = Surface::Monitor;
             let owner = super::super::action_customization::owner(surface);
@@ -746,6 +748,7 @@ mod tests {
             render(&ctx,&mut app,surface,vec![pointer(press,egui::PointerButton::Primary,false)]);
             assert_eq!(app.control_bars,layout);
             assert!((app.mpv.0.get_property::<f64>("volume").unwrap()-50.0).abs()>0.1,"volume slider did not receive the gesture");
+        }
         }
     }
 

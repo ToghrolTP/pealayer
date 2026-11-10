@@ -24,6 +24,8 @@ export interface AppearanceState {
   ui_font_name: string;
   monospace_font_name: string;
   workspace_ui: 'craft_ui' | 'egui_dock';
+  native_monitor_style: 'compact' | 'film_craft';
+  native_timeline_style: 'standard' | 'film_craft';
   preferences_grouped_navigation: boolean;
   theme: 'system' | 'light' | 'dark';
   color_palette: 'studio' | 'native';
@@ -60,6 +62,8 @@ export function mergeAppearance<T extends Record<string, any>>(
     ui_font_name: appearance.ui_font_name,
     monospace_font_name: appearance.monospace_font_name,
     workspace_ui: appearance.workspace_ui,
+    native_monitor_style: appearance.native_monitor_style,
+    native_timeline_style: appearance.native_timeline_style,
     preferences_grouped_navigation: appearance.preferences_grouped_navigation,
     theme: appearance.theme,
     color_palette: appearance.color_palette,

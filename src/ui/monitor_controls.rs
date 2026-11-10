@@ -19,6 +19,9 @@ enum Group {
     Transport,
     Timeline,
     Tracks,
+    Elapsed,
+    Duration,
+    Seek,
 }
 
 #[derive(Clone, Copy)]
@@ -30,6 +33,9 @@ pub(super) struct Metrics {
     row_height: f32,
     gap_y: f32,
     rtl: bool,
+    style: crate::config::NativeMonitorStyle,
+    elapsed_width: f32,
+    duration_width: f32,
 }
 
 fn button_width(ui: &egui::Ui, label: &str) -> f32 {
@@ -104,6 +110,9 @@ impl Metrics {
             row_height: button_height(ui).max(super::controls::elapsed_editor_size(ui).y),
             gap_y: ui.spacing().item_spacing.y,
             rtl: app.rtl,
+            style: app.native_monitor_style,
+            elapsed_width: 104.0 + 72.0 + gap,
+            duration_width: total_width + 72.0 + button_height(ui) + 3.0 * gap,
         }
     }
 
@@ -120,6 +129,10 @@ impl Metrics {
     }
 
     pub(super) fn height(self, width: f32) -> f32 {
+        if self.style == crate::config::NativeMonitorStyle::FilmCraft {
+            let rows = self.filmcraft_time_rows(width) + 1 + self.filmcraft_action_rows(width);
+            return rows as f32 * self.row_height + (rows - 1) as f32 * self.gap_y;
+        }
         let rows = match self.rows(width) {
             Rows::One => 1.0,
             Rows::Two => 2.0,
@@ -129,6 +142,14 @@ impl Metrics {
     }
 
     fn cluster_gap(self) -> f32 { (2.0*self.gap).max(24.0) }
+
+    fn filmcraft_time_rows(self, width: f32) -> usize {
+        if width >= self.elapsed_width + self.duration_width + self.gap { 1 } else { 2 }
+    }
+
+    fn filmcraft_action_rows(self, width: f32) -> usize {
+        if width >= self.transport + self.tracks + self.cluster_gap() { 1 } else { 2 }
+    }
 }
 
 /// Explicit bounded groups keep the elastic seekbar from forcing a wrap and
@@ -145,6 +166,27 @@ fn draw_layout(ui: &mut egui::Ui, metrics: Metrics, mut draw: impl FnMut(Group, 
         child.set_clip_rect(rect.intersect(ui.clip_rect()));
         draw(group, &mut child);
     };
+    if metrics.style == crate::config::NativeMonitorStyle::FilmCraft {
+        let time_rows = metrics.filmcraft_time_rows(width);
+        slot(Group::Elapsed, 0, 0.0, metrics.elapsed_width.min(width));
+        let duration_width = metrics.duration_width.min(width);
+        slot(Group::Duration, time_rows - 1, width - duration_width, duration_width);
+        // FilmCraft's middle tier gives the scrubber the entire available width.
+        slot(Group::Seek, time_rows, 0.0, width);
+        let transport = metrics.transport.min(width);
+        let tracks = metrics.tracks.min(width);
+        let action_row = time_rows + 1;
+        if metrics.filmcraft_action_rows(width) == 1 {
+            let centered = (width - transport) / 2.0;
+            let available_before_tail = width - tracks - metrics.cluster_gap() - transport;
+            slot(Group::Transport, action_row, centered.min(available_before_tail).max(0.0), transport);
+            slot(Group::Tracks, action_row, width - tracks, tracks);
+        } else {
+            slot(Group::Transport, action_row, (width - transport) / 2.0, transport);
+            slot(Group::Tracks, action_row + 1, width - tracks, tracks);
+        }
+        return;
+    }
     match metrics.rows(width) {
         Rows::One => {
             let timeline = width - metrics.transport - metrics.tracks - 2.0 * metrics.gap;
@@ -173,26 +215,67 @@ pub(super) fn draw(app: &mut PealayerApp, ui: &mut egui::Ui, metrics: Metrics) {
         Group::Transport => super::control_bar::draw_group(app, ui, crate::config::ControlBarSurface::Monitor, false,control_owner),
         Group::Timeline => draw_timeline(app, ui),
         Group::Tracks => super::control_bar::draw_group(app, ui, crate::config::ControlBarSurface::Monitor, true,control_owner),
+        Group::Elapsed => {
+            let can_seek = app.current_video_path.is_some() && app.is_seekable && app.duration > 0.0;
+            ui.scope(|ui| {
+                let tokens = super::craft_theme::current(ui.ctx());
+                ui.visuals_mut().override_text_color = Some(tokens.timecode);
+                super::controls::draw_elapsed_editor(app, ui, "nle-elapsed-editor", can_seek);
+                draw_preview_selector(app,ui,true);
+            });
+        }
+        Group::Duration => {
+            let layout = if app.rtl { egui::Layout::left_to_right(egui::Align::Center) }
+                else { egui::Layout::right_to_left(egui::Align::Center) };
+            ui.with_layout(layout, |ui| {
+                draw_total(app, ui);
+                let h=super::control_density::height(ui);
+                let response=super::craft_theme::icon_button_glyph(ui,"Transport settings",super::icons::GEAR,
+                    egui::vec2(h,h),false,false);
+                egui::Popup::menu(&response).show(|ui| super::controls::transport_context_menu(app,ui));
+                draw_preview_selector(app,ui,false);
+            });
+        }
+        Group::Seek => { draw_seekbar(app, ui, true); }
     });
 }
 
-fn draw_timeline(app: &mut PealayerApp, ui: &mut egui::Ui) {
-    let has_video = app.current_video_path.is_some();
-    let can_seek = has_video && app.is_seekable && app.duration > 0.0;
+fn draw_preview_selector(app:&mut PealayerApp,ui:&mut egui::Ui,aspect:bool) {
+    use crate::config::{MonitorAspect as A,MonitorResolution as R};
+    let label=if aspect {app.monitor_preview.aspect.label()} else {app.monitor_preview.resolution.label()};
+    let width=ui.available_width().min(72.0).max(1.0);
+    let h=super::control_density::height(ui);
+    let (rect,_)=ui.allocate_exact_size(egui::vec2(width,h),egui::Sense::hover());
+    // Trailing allocation is reversed even in LTR; paint direction belongs to
+    // the application, not that allocation order.
+    let mut field=ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(
+        if app.rtl {egui::Layout::right_to_left(egui::Align::Center)} else {egui::Layout::left_to_right(egui::Align::Center)}));
+    let response=super::craft_theme::dropdown_text(&mut field,rect,label,&super::craft_theme::current(ui.ctx()),
+        ui.make_persistent_id(("monitor-preview-selector",aspect)))
+        .on_hover_text(if aspect {"Preview aspect ratio; Fit uses the source. This does not change media metadata."}
+            else {"Preview render resolution. Reduces GPU preview size, not the source file or external player."});
+    egui::Popup::menu(&response).show(|ui| {
+        let before=app.monitor_preview;
+        if aspect {
+            for value in [A::Source,A::Wide,A::Classic,A::Cinema] {
+                if ui.selectable_label(before.aspect==value,value.label()).clicked() {
+                    app.monitor_preview.aspect=value;ui.close();
+                }
+            }
+        } else {
+            for value in [R::Full,R::Half,R::Quarter,R::Eighth] {
+                if ui.selectable_label(before.resolution==value,value.label()).clicked() {
+                    app.monitor_preview.resolution=value;ui.close();
+                }
+            }
+        }
+        if app.monitor_preview!=before {app.save_config();ui.ctx().request_repaint();}
+    });
+}
+
+fn draw_total(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let elapsed = app.seek_pos.unwrap_or(app.playback_time);
     let include_hours = app.duration >= 3600.0;
-    crate::ui::controls::draw_elapsed_editor(app, ui, "nle-elapsed-editor", can_seek);
-
-    let mut current_pos = if has_video {
-        app.seek_pos.unwrap_or(app.playback_time)
-    } else {
-        0.0
-    };
-    let max_dur = if has_video && app.duration > 0.0 {
-        app.duration
-    } else {
-        1.0
-    };
     let displayed_total = if app.show_remaining_time {
         -(app.duration - elapsed).max(0.0)
     } else {
@@ -233,30 +316,48 @@ fn draw_timeline(app: &mut PealayerApp, ui: &mut egui::Ui) {
             false,
         ),
     };
+    let total_response = crate::ui::controls::draw_duration_label(
+        app, ui, total_label, total_tooltip, finite_timeline,
+    );
+    if finite_timeline && total_response.clicked() {
+        app.show_remaining_time = !app.show_remaining_time;
+        app.save_config();
+    }
+}
+
+fn draw_timeline(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    let can_seek = app.current_video_path.is_some() && app.is_seekable && app.duration > 0.0;
+    super::controls::draw_elapsed_editor(app, ui, "nle-elapsed-editor", can_seek);
     // Anchor the duration and fullscreen affordance to the right
     // edge first, then give the seekbar the exact remaining width.
     // A former fixed 180 px reservation was wider than these
     // controls and left a visible, useless tail after fullscreen.
-    let response = ui
-        .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let total_response = crate::ui::controls::draw_duration_label(
-                app, ui, total_label, total_tooltip, finite_timeline,
-            );
-            if finite_timeline && total_response.clicked() {
-                app.show_remaining_time = !app.show_remaining_time;
-                app.save_config();
-            }
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        draw_total(app, ui);
+        draw_seekbar(app, ui, false);
+    });
+}
 
-            let slider = egui::Slider::new(&mut current_pos, 0.0..=max_dur)
+fn draw_seekbar(app: &mut PealayerApp, ui: &mut egui::Ui, filmcraft: bool) -> egui::Response {
+    let has_video = app.current_video_path.is_some();
+    let can_seek = has_video && app.is_seekable && app.duration > 0.0;
+    let mut current_pos = if has_video { app.seek_pos.unwrap_or(app.playback_time) } else { 0.0 };
+    let max_dur = if has_video && app.duration > 0.0 { app.duration } else { 1.0 };
+    let slider = egui::Slider::new(&mut current_pos, 0.0..=max_dur)
                 .show_value(false)
                 .trailing_fill(true);
-            let response = crate::ui::controls::add_fill_width_slider(ui, can_seek, slider);
-            response.context_menu(|ui| crate::ui::controls::transport_context_menu(app, ui));
-            response
-        })
-        .inner;
+    // Keep egui's input, keyboard focus, accessibility and exact value mapping;
+    // only the FilmCraft presentation is application-painted.
+    let response = ui.scope(|ui| {
+        if filmcraft {ui.set_opacity(0.0);}
+        crate::ui::controls::add_fill_width_slider(ui, can_seek, slider)
+    }).inner;
+    response.context_menu(|ui| crate::ui::controls::transport_context_menu(app, ui));
 
-    if let Some(buffered_until) = app.buffered_until() {
+    if filmcraft {
+        super::craft_theme::paint_monitor_seek(ui,&response,(current_pos/max_dur) as f32,
+            app.buffered_until().map(|end|(end/max_dur) as f32));
+    } else if let Some(buffered_until) = app.buffered_until() {
         crate::ui::controls::paint_buffered_seekbar(
             ui,
             &response,
@@ -264,7 +365,8 @@ fn draw_timeline(app: &mut PealayerApp, ui: &mut egui::Ui) {
             (buffered_until / app.duration).clamp(0.0, 1.0) as f32,
         );
     }
-    if let Some(chapter_time) = crate::ui::controls::paint_seekbar_markers(ui, &response, app) {
+    if filmcraft { paint_seek_ticks(ui, &response, app); }
+    if let Some(chapter_time) = crate::ui::controls::paint_seekbar_markers_presentation(ui, &response, app,filmcraft) {
         current_pos = chapter_time;
     }
     let show_seek_preview = app.nle_seekbar_hover_thumbnails;
@@ -281,11 +383,66 @@ fn draw_timeline(app: &mut PealayerApp, ui: &mut egui::Ui) {
     {
         app.finish_scrub(current_pos);
     }
+    response
+}
+
+/// Decorative FilmCraft ticks share the actual slider's mapping with markers,
+/// hover previews and seeks. They stay inside its rail and add no hit targets.
+pub(crate) fn paint_seek_ticks(ui: &egui::Ui, response: &egui::Response, app: &PealayerApp) {
+    if !app.duration.is_finite() || app.duration <= 0.0 { return; }
+    let range = super::controls::seekbar_value_range(response.rect);
+    let width = *range.end() - *range.start();
+    if width <= 0.0 { return; }
+    let fps = if app.media_fps.is_finite() && app.media_fps > 0.0 { app.media_fps } else { 30.0 };
+    let frames = app.duration * fps;
+    if !frames.is_finite() || frames <= 0.0 { return; }
+    let (minor, major) = super::craft_theme::ruler_steps(f64::from(width) / frames, fps.round().clamp(1.0, 240.0) as i64);
+    let tokens = super::craft_theme::current(ui.ctx());
+    let painter = ui.painter().with_clip_rect(response.rect.intersect(ui.clip_rect()));
+    for index in 0..256 {
+        let frame = index as f64 * minor as f64;
+        if frame > frames { break; }
+        let x = egui::lerp(range.clone(), (frame / frames) as f32);
+        let major_tick = (index as i64 * minor) % major == 0;
+        let height = if major_tick { 5.0 } else { 2.5 };
+        painter.line_segment([egui::pos2(x, response.rect.bottom() - height), egui::pos2(x, response.rect.bottom())],
+            egui::Stroke::new(1.0, tokens.text_dim.gamma_multiply(if major_tick { 0.5 } else { 0.3 })));
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn filmcraft_preview_dropdowns_really_change_choices_without_seeking_or_overwriting_source() {
+        let _lock=crate::app::tests::lock_app_tests();
+        for (aspect,choice) in [(true,"4:3"),(false,"1/4")] {
+            let ctx=egui::Context::default();let mut app=PealayerApp::default();
+            app.workspace_rendering=true; // Save is deferred, as in a real panel body.
+            app.video_aspect_ratio=2.39;app.playback_time=5.25;app.is_paused=true;
+            let mut frame=|events| ctx.run_ui(egui::RawInput {
+                screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(600.0,400.0))),events,..Default::default()
+            },|ui|draw_preview_selector(&mut app,ui,aspect));
+            frame(vec![]).drop_without_applying_deltas();
+            let point=egui::pos2(35.0,12.0);
+            let event=|pos,pressed|egui::Event::PointerButton{pos,pressed,button:egui::PointerButton::Primary,modifiers:Default::default()};
+            frame(vec![egui::Event::PointerMoved(point),event(point,true)]).drop_without_applying_deltas();
+            frame(vec![event(point,false)]).drop_without_applying_deltas();
+            let output=frame(vec![]);
+            let target=output.shapes.iter().find_map(|s|match &s.shape{
+                egui::Shape::Text(t) if t.galley.text()==choice=>Some(t.pos+t.galley.rect.center().to_vec2()),_=>None,
+            }).expect("actual preview choice popup");
+            output.drop_without_applying_deltas();
+            frame(vec![egui::Event::PointerMoved(target),event(target,true)]).drop_without_applying_deltas();
+            frame(vec![event(target,false)]).drop_without_applying_deltas();
+            drop(frame);
+            if aspect {assert_eq!(app.monitor_preview.aspect,crate::config::MonitorAspect::Classic);}
+            else {assert_eq!(app.monitor_preview.resolution,crate::config::MonitorResolution::Quarter);}
+            assert_eq!(app.video_aspect_ratio,2.39);assert_eq!(app.playback_time,5.25);
+            assert!(app.is_paused && app.seek_pos.is_none() && app.deferred_config_save);
+        }
+    }
     use crate::app::MediaTrackType;
 
     fn metrics() -> Metrics {
@@ -297,6 +454,9 @@ mod tests {
             gap_y: 4.0,
             row_height: 24.0,
             rtl: false,
+            style: crate::config::NativeMonitorStyle::Compact,
+            elapsed_width: 104.0,
+            duration_width: 96.0,
         }
     }
 
@@ -424,10 +584,12 @@ mod tests {
     #[test]
     fn customized_real_controls_fit_the_reserved_monitor_rows() {
         let _lock=crate::app::tests::lock_app_tests();
+        for presentation in [crate::config::NativeMonitorStyle::Compact, crate::config::NativeMonitorStyle::FilmCraft] {
         for hidden in [true,false] {
             for width in [240.0,400.0,700.0,1400.0] {
                 let ctx=egui::Context::default();
                 let mut app=PealayerApp::default();
+                app.native_monitor_style = presentation;
                 app.control_bars.monitor.hidden=[hidden;crate::config::ControlBarAction::COUNT];
                 for _ in 0..3 {
                     let mut output=ctx.run_ui(egui::RawInput {
@@ -443,14 +605,17 @@ mod tests {
                 }
             }
         }
+        }
     }
 
     #[test]
     fn actual_monitor_overflow_opens_after_reflow_and_in_rtl() {
         let _lock=crate::app::tests::lock_app_tests();
+        for presentation in [crate::config::NativeMonitorStyle::Compact, crate::config::NativeMonitorStyle::FilmCraft] {
         for width in [260.0,400.0,700.0,1400.0] {
             for rtl in [false,true] {
                 let ctx=egui::Context::default(); let mut app=PealayerApp::default(); app.rtl=rtl;
+                app.native_monitor_style = presentation;
                 let owner=std::cell::Cell::new(egui::Id::NULL);
                 let mut render=|app:&mut PealayerApp,events| {
                     let mut output=ctx.run_ui(egui::RawInput {
@@ -469,6 +634,109 @@ mod tests {
                 let output=render(&mut app,vec![]);
                 assert!(output.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Text(text) if text.galley.text().contains("Show / hide actions"))),"overflow at width={width} rtl={rtl}");
             }
+        }
+        }
+    }
+
+    #[test]
+    fn filmcraft_measured_tiers_mirror_and_keep_every_slot_inside_the_footer() {
+        for width in [180.0, 240.0, 390.0, 600.0, 1400.0] {
+            for row_height in [25.0, 36.0, 52.0] {
+                for rtl in [false, true] {
+                    let ctx = egui::Context::default();
+                    ctx.run_ui(egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 500.0))),
+                        ..Default::default()
+                    }, |ui| {
+                        let m = Metrics { style: crate::config::NativeMonitorStyle::FilmCraft, row_height, rtl, ..metrics() };
+                        let available = ui.available_rect_before_wrap();
+                        let mut slots = Vec::new();
+                        draw_layout(ui, m, |group, ui| slots.push((group, ui.max_rect())));
+                        assert_eq!(slots.len(), 5);
+                        let find = |kind| slots.iter().find(|(group, _)| *group == kind).unwrap().1;
+                        let seek = find(Group::Seek);
+                        assert_eq!(seek.width(), available.width());
+                        assert!(seek.top() >= find(Group::Elapsed).bottom());
+                        assert!(seek.top() >= find(Group::Duration).bottom());
+                        assert!(find(Group::Transport).top() > seek.bottom());
+                        let tail = find(Group::Tracks);
+                        assert!((if rtl { tail.left() - available.left() } else { tail.right() - available.right() }).abs() < 0.01);
+                        for (_, rect) in &slots {
+                            assert!(rect.left() >= available.left() && rect.right() <= available.right() + 0.01);
+                            assert_eq!(rect.height(), row_height);
+                        }
+                        let bottom = slots.iter().map(|(_, rect)| rect.bottom()).fold(0.0_f32, f32::max);
+                        assert!((bottom - available.top() - m.height(width)).abs() < 0.01);
+                    }).drop_without_applying_deltas();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn filmcraft_seek_decoration_stays_inside_the_same_interactive_slider() {
+        let _lock = crate::app::tests::lock_app_tests();
+        for scale in [1.0, 1.25, 2.0] {
+            let ctx = egui::Context::default();
+            ctx.set_pixels_per_point(scale);
+            let mut app = PealayerApp::default();
+            app.duration = 120.0;
+            app.media_fps = 23.976;
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let (rect, response) = ui.allocate_exact_size(egui::vec2(400.0, 25.0), egui::Sense::hover());
+                paint_seek_ticks(ui, &response, &app);
+                assert_eq!(response.rect, rect);
+            });
+            let mut count = 0;
+            for shape in &output.shapes {
+                if let egui::Shape::LineSegment { points, .. } = &shape.shape {
+                    count += 1;
+                    assert!(shape.clip_rect.contains(points[0]) && shape.clip_rect.contains(points[1]));
+                    assert!((points[0].x - points[1].x).abs() < f32::EPSILON);
+                }
+            }
+            assert!(count > 2 && count <= 256);
+            output.drop_without_applying_deltas();
+        }
+    }
+
+    #[test]
+    fn both_seek_presentations_keep_pointer_mapping_and_keyboard_adjustment() {
+        let _lock = crate::app::tests::lock_app_tests();
+        for filmcraft in [false, true] {
+            let ctx = egui::Context::default();
+            let mut app = PealayerApp::default();
+            app.current_video_path = Some(std::path::PathBuf::from("test-media.mp4"));
+            app.duration = 120.0;
+            app.playback_time = 30.0;
+            app.is_paused = true;
+            app.is_seekable = true;
+            app.nle_seekbar_hover_thumbnails = false;
+            let render = |app: &mut PealayerApp, events| {
+                let mut response = None;
+                ctx.run_ui(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(500.0, 160.0))),
+                    events, ..Default::default()
+                }, |ui| { response = Some(draw_seekbar(app, ui, filmcraft)); }).drop_without_applying_deltas();
+                response.unwrap()
+            };
+            render(&mut app, vec![]);
+            let response = render(&mut app, vec![]);
+            let range = super::super::controls::seekbar_value_range(response.rect);
+            let pos = egui::pos2(egui::lerp(range, 0.75), response.rect.center().y);
+            let pointer = |pressed| egui::Event::PointerButton {
+                pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default(),
+            };
+            render(&mut app, vec![egui::Event::PointerMoved(pos), pointer(true)]);
+            render(&mut app, vec![pointer(false)]);
+            assert!((app.seek_pos.unwrap() - 90.0).abs() < 0.2, "presentation={filmcraft}");
+            let before = app.seek_pos.unwrap();
+            ctx.memory_mut(|memory| memory.request_focus(response.id));
+            render(&mut app, vec![egui::Event::Key {
+                key: egui::Key::ArrowRight, physical_key: Some(egui::Key::ArrowRight),
+                pressed: true, repeat: false, modifiers: Default::default(),
+            }]);
+            assert!(app.seek_pos.unwrap() > before, "keyboard seek lost in presentation={filmcraft}");
         }
     }
 

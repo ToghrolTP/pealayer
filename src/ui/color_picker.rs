@@ -366,7 +366,7 @@ pub fn color_dropdown(ui: &mut egui::Ui, salt: impl std::hash::Hash + std::fmt::
         ui.painter().rect(rect, visuals.corner_radius, visuals.weak_bg_fill, visuals.bg_stroke, egui::StrokeKind::Inside);
         response
     }).inner;
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, ui.is_enabled(), label));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, ui.is_enabled(), label));
     let galley = ui.painter().layout_no_wrap(label.to_owned(), egui::TextStyle::Button.resolve(ui.style()), ui.visuals().text_color());
     ui.painter().with_clip_rect(response.rect.shrink(1.0)).galley(
         egui::pos2(response.rect.left()+27.0,response.rect.center().y-galley.size().y/2.0),galley,ui.visuals().text_color());

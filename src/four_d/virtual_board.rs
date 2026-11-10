@@ -10,7 +10,6 @@ use crate::four_d::process_supervisor::ManagedChild;
 pub struct VirtualBoardSession {
     child: ManagedChild,
     pub port: u16,
-    temp_eeprom: Option<PathBuf>,
     stdin: Arc<Mutex<Option<ChildStdin>>>,
 }
 
@@ -107,24 +106,14 @@ impl VirtualBoardSession {
             };
             drop(listener);
 
-            let run_id = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos();
-            let temp_eeprom = std::env::temp_dir().join(format!(
-                "virtual-mcu-eeprom-{}-{}-{run_id}.bin",
-                std::process::id(),
-                attempt
-            ));
-
             let mut cmd = Command::new(&binary);
             cmd.args([
                 "--bind",
                 "127.0.0.1",
                 "--port",
                 &port.to_string(),
-                "--eeprom",
-                &temp_eeprom.to_string_lossy(),
+                "--memory",
+                "--no-host-peripherals",
                 "--quiet",
             ])
             .stdin(Stdio::piped())
@@ -135,7 +124,6 @@ impl VirtualBoardSession {
                 Ok(c) => c,
                 Err(e) => {
                     last_error = format!("spawn virtual_board child process ({}): {e}", binary.display());
-                    let _ = std::fs::remove_file(&temp_eeprom);
                     thread::sleep(Duration::from_millis(50));
                     continue;
                 }
@@ -146,7 +134,6 @@ impl VirtualBoardSession {
             let mut session = Self {
                 child,
                 port,
-                temp_eeprom: Some(temp_eeprom),
                 stdin,
             };
             let deadline = Instant::now() + Duration::from_secs(3);
@@ -185,16 +172,6 @@ impl VirtualBoardSession {
             Ok(())
         } else {
             Err("virtual board stdin is unavailable".to_string())
-        }
-    }
-}
-
-impl Drop for VirtualBoardSession {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        if let Some(ref path) = self.temp_eeprom {
-            let _ = std::fs::remove_file(path);
         }
     }
 }

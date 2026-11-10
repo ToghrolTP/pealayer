@@ -685,9 +685,425 @@ pub fn paint_widget_focus(painter: &egui::Painter, response: &egui::Response, t:
     }
 }
 
+/// Shows an `IconButton` using FilmCraft tokens and standard widget radius (4px).
+pub fn icon_button(
+    ui: &mut egui::Ui,
+    label: &str,
+    size: egui::Vec2,
+    selected: bool,
+    frame: bool,
+    paint_icon: impl FnOnce(&egui::Ui, egui::Rect, egui::Color32),
+) -> egui::Response {
+    let tokens = current(ui.ctx());
+    let style = icon_button_style(&tokens, frame);
+    let mut btn = craft_ui::buttons::IconButton::new(label, size, &style).selected(selected);
+    if frame {
+        btn = btn.single_shape_frame();
+    }
+    btn.show(ui, paint_icon)
+}
+
+/// Shows an `IconButton` with a text or Phosphor icon glyph.
+pub fn icon_button_glyph(
+    ui: &mut egui::Ui,
+    label: &str,
+    glyph: &str,
+    size: egui::Vec2,
+    selected: bool,
+    frame: bool,
+) -> egui::Response {
+    icon_button(ui, label, size, selected, frame, |ui, rect, color| {
+        let font = egui::TextStyle::Button.resolve(ui.style());
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            glyph,
+            font,
+            color,
+        );
+    })
+}
+
+/// The Ruler's two strides, in frames: `(minor_stride, label_stride)`.
+///
+/// `label_step` is the first ladder step wide enough to keep timestamps apart (110 pt); `minor` is the
+/// finest divisor of `label_step` that still leaves ticks 12 pt apart. Deriving the tick stride as a
+/// divisor puts every label on a tick and keeps the ticks between labels evenly spaced.
+pub fn ruler_steps(frame_px: f64, base: i64) -> (i64, i64) {
+    let base = base.max(1);
+    let big = |k: i64| base.saturating_mul(k);
+    let steps = [
+        1, 2, 5, 10,
+        (base / 2).max(1),
+        base,
+        big(2), big(5), big(10), big(15), big(30), big(60),
+        big(120), big(300), big(600), big(1800), big(3600),
+    ];
+    let label_step = (*steps.iter().find(|s| **s as f64 * frame_px >= 110.0).unwrap_or(&big(3600))).max(1);
+    let minor = (1..=9)
+        .rev()
+        .filter(|k| label_step.rem_euclid(*k) == 0)
+        .map(|k| label_step / k)
+        .find(|m| *m as f64 * frame_px >= 12.0)
+        .unwrap_or(label_step)
+        .max(1);
+    (minor, label_step)
+}
+
+/// FilmCraft's frame ladder positions frames at the actual media rate. The
+/// nominal rate only chooses readable strides; it does not change media timing.
+pub fn paint_frame_ruler(painter: &egui::Painter, rect: egui::Rect, origin_x: f32,
+    points_per_second: f32, media_fps: f64, tokens: &Tokens) {
+    if !points_per_second.is_finite() || points_per_second <= 0.0 { return; }
+    let fps = if media_fps.is_finite() && media_fps > 0.0 { media_fps.min(1000.0) } else { 30.0 };
+    let frame_px = f64::from(points_per_second) / fps;
+    let (minor, major) = ruler_steps(frame_px, fps.round() as i64);
+    let clip = rect.intersect(painter.clip_rect());
+    let first = (((clip.left() - origin_x).max(0.0) as f64 / frame_px) as i64 / minor) * minor;
+    let last = (((clip.right() - origin_x).max(0.0) as f64 / frame_px).ceil() as i64).saturating_add(minor);
+    let font = egui::FontId::monospace(9.0);
+    for frame in (first..=last).step_by(minor as usize).take(4096) {
+        let x = origin_x + (frame as f64 * frame_px) as f32;
+        let labeled = frame % major == 0;
+        let height = if labeled { 8.0 } else { 3.5 };
+        painter.line_segment([egui::pos2(x, rect.bottom()-height), egui::pos2(x, rect.bottom())],
+            Stroke::new(1.0, tokens.tl_ruler_tick.gamma_multiply(if labeled { 1.0 } else { 0.6 })));
+        if labeled {
+            let ms = (frame as f64 * 1000.0 / fps).round().max(0.0) as u64;
+            let text = crate::duration::format_timeline_time_ms(ms,
+                major as f64 / fps < 1.0 || fps.fract().abs() > 0.0001);
+            let galley = painter.layout_no_wrap(text, font.clone(), tokens.tl_ruler_text);
+            let bounds = egui::Rect::from_center_size(egui::pos2(x, rect.top()+13.0), galley.size());
+            if clip.contains_rect(bounds) { painter.galley(bounds.min, galley, tokens.tl_ruler_text); }
+        }
+    }
+}
+
+/// How far the Timeline reaches, in seconds: ten minutes past the end of the sequence (FilmCraft standard).
+/// FilmCraft's original monitor track and terminal rings, painted over the
+/// real accessible slider. All overlays use its actual value range.
+pub fn paint_monitor_seek(ui: &egui::Ui, response: &egui::Response, fraction: f32, buffered: Option<f32>) {
+    let tokens = current(ui.ctx());
+    let color = |c: Color32| c.gamma_multiply(if response.enabled() {1.0} else {0.4});
+    let range = super::controls::seekbar_value_range(response.rect);
+    if range.end() <= range.start() { return; }
+    let track = egui::Rect::from_min_max(egui::pos2(*range.start(),response.rect.center().y-4.0),
+        egui::pos2(*range.end(),response.rect.center().y+4.0));
+    let p = ui.painter().with_clip_rect(response.rect.intersect(ui.clip_rect()));
+    p.rect_filled(track,4.0,color(tokens.separator));
+    let x = egui::lerp(range.clone(),fraction.clamp(0.0,1.0));
+    if let Some(end) = buffered.filter(|end|end.is_finite() && *end > fraction) {
+        p.rect_filled(egui::Rect::from_min_max(egui::pos2(x,track.top()),
+            egui::pos2(egui::lerp(range.clone(),end.clamp(0.0,1.0)),track.bottom())),2.0,color(tokens.accent.gamma_multiply(0.3)));
+    }
+    for edge in [*range.start(),*range.end()] {
+        p.circle_filled(egui::pos2(edge,track.center().y),3.5,color(tokens.panel_bg));
+        p.circle_stroke(egui::pos2(edge,track.center().y),3.5,Stroke::new(1.25,color(tokens.icon_active)));
+    }
+    let top = response.rect.top()+1.0;
+    paint_filmcraft_playhead(&p,&p,x,top,top+8.0,track.bottom(),color(tokens.playhead));
+    if response.has_focus() { p.rect_stroke(response.rect.shrink(0.5),3.0,Stroke::new(1.0,tokens.focus),StrokeKind::Inside); }
+}
+
+pub fn paint_monitor_volume(ui: &egui::Ui, response: &egui::Response, fraction: f32) {
+    let t = current(ui.ctx());
+    let color = |c: Color32| c.gamma_multiply(if response.enabled() {1.0} else {0.4});
+    let range = super::controls::seekbar_value_range(response.rect);
+    if range.end() <= range.start() { return; }
+    let x = egui::lerp(range.clone(),fraction.clamp(0.0,1.0));
+    let p=ui.painter().with_clip_rect(response.rect.intersect(ui.clip_rect()));
+    let track=egui::Rect::from_min_max(egui::pos2(*range.start(),response.rect.center().y-2.0),egui::pos2(*range.end(),response.rect.center().y+2.0));
+    p.rect_filled(track,2.0,color(t.separator));
+    p.rect_filled(egui::Rect::from_min_max(track.min,egui::pos2(x,track.bottom())),2.0,color(t.accent));
+    p.circle_filled(egui::pos2(x,track.center().y),4.5,color(t.panel_bg));
+    p.circle_stroke(egui::pos2(x,track.center().y),4.5,Stroke::new(1.5,color(if response.hovered() || response.dragged() {t.tab_text_active} else {t.icon_active})));
+    if response.has_focus() { p.rect_stroke(response.rect.shrink(0.5),3.0,Stroke::new(1.0,t.focus),StrokeKind::Inside); }
+}
+
+/// The original two-point overview represents buffered media, not rendered
+/// frames. No buffer observation means no fabricated green progress.
+pub fn paint_buffered_overview(p: &egui::Painter, ruler: egui::Rect, origin_x:f32, pps:f32,
+    buffered_until:Option<f64>, t:&Tokens) {
+    if let Some(end)=buffered_until.filter(|v|v.is_finite() && *v>0.0)
+        && pps.is_finite() && pps>0.0 {
+        let end=origin_x+end as f32*pps;
+        let bar=egui::Rect::from_min_max(egui::pos2(origin_x,ruler.bottom()-2.0),egui::pos2(end,ruler.bottom())).intersect(ruler);
+        if bar.is_positive() { p.with_clip_rect(ruler.intersect(p.clip_rect())).rect_filled(bar,0.0,t.render_green); }
+    }
+}
+
+pub fn timeline_extent(sequence_seconds: f64) -> f64 {
+    sequence_seconds.max(0.0) + 600.0
+}
+
+/// The least `pps` (points a second) the Timeline zooms out to.
+pub fn min_pps(sequence_seconds: f64, width: f32) -> f64 {
+    (f64::from(width.max(0.0)) / timeline_extent(sequence_seconds)).clamp(1e-6, 24_000.0)
+}
+
+/// The narrowest the zoom scroll bar's thumb gets: room for its two handles and a part between them to grab.
+pub const MIN_THUMB_W: f32 = 34.0;
+
+/// What a pointer is over on a zoom scroll bar (the Timeline's and the monitors'): the circular
+/// handle at either end of the thumb zooms, the middle scrolls, and a press beside the thumb brings
+/// it there. The press and the hover cursor ask the same question here, so they cannot disagree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ZoomThumbPart {
+    Beside,
+    Left,
+    Middle,
+    Right,
+}
+
+impl ZoomThumbPart {
+    pub fn at(thumb: egui::Rect, pos: egui::Pos2) -> Self {
+        if !thumb.expand2(egui::vec2(0.0, 4.0)).contains(pos) {
+            Self::Beside
+        } else if (pos.x - thumb.min.x).abs() < 9.0 {
+            Self::Left
+        } else if (pos.x - thumb.max.x).abs() < 9.0 {
+            Self::Right
+        } else {
+            Self::Middle
+        }
+    }
+}
+
+/// The horizontal resize cursor of a zoom scroll bar: over either handle of its `thumb`, and for as
+/// long as a drag of a handle goes on (`handle_grabbed`), which the pointer can take off the bar.
+pub fn zoom_thumb_cursor(ui: &egui::Ui, resp: &egui::Response, thumb: egui::Rect, handle_grabbed: bool) {
+    let on_handle = if resp.dragged() {
+        handle_grabbed
+    } else {
+        resp.hover_pos().is_some_and(|pos| matches!(ZoomThumbPart::at(thumb, pos), ZoomThumbPart::Left | ZoomThumbPart::Right))
+    };
+    if on_handle {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+    }
+}
+
+/// Where the zoom scroll bar's thumb is: (left edge, width, seconds of scroll per point of thumb travel).
+pub fn zoom_thumb(bar: egui::Rect, seq_seconds: f64, scroll: f64, pps: f64) -> (f32, f32, f64) {
+    let vis = bar.width() as f64 / pps.max(1e-9);
+    let total = timeline_extent(seq_seconds).max(vis);
+    let w = ((vis / total) as f32 * bar.width()).clamp(MIN_THUMB_W.min(bar.width()), bar.width());
+    let travel = (bar.width() - w).max(0.0);
+    let range = (total - vis).max(0.0);
+    let at = if range > 0.0 { (scroll / range).clamp(0.0, 1.0) as f32 * travel } else { 0.0 };
+    (bar.min.x + at, w, if travel > 0.5 { range / travel as f64 } else { 0.0 })
+}
+
+/// Paint FilmCraft's zoom scroll bar thumb with dual-circle handles.
+pub fn paint_zoom_thumb(
+    p: &egui::Painter,
+    bar: egui::Rect,
+    thumb: egui::Rect,
+    hover: bool,
+    tokens: &Tokens,
+) {
+    // track
+    p.rect_filled(bar, bar.height() / 2.0, tokens.separator);
+    // thumb
+    p.rect_filled(
+        thumb,
+        thumb.height() / 2.0,
+        if hover { tokens.scroll_thumb_hover } else { tokens.scroll_thumb },
+    );
+    // dual circular handles
+    for x in [
+        thumb.min.x + thumb.height() / 2.0,
+        thumb.max.x - thumb.height() / 2.0,
+    ] {
+        p.circle_filled(egui::pos2(x, thumb.center().y), 4.5, tokens.panel_bg);
+        p.circle_stroke(
+            egui::pos2(x, thumb.center().y),
+            4.5,
+            Stroke::new(1.5, tokens.icon_active),
+        );
+    }
+}
+
+/// Paint FilmCraft's precision pentagon playhead and continuous subpixel stem line.
+pub fn paint_filmcraft_playhead(
+    painter: &egui::Painter,
+    ruler_painter: &egui::Painter,
+    px: f32,
+    top: f32,
+    tip: f32,
+    track_bottom: f32,
+    color: Color32,
+) {
+    // 10 pt wide, 13 pt tall pentagonal head with 5 pt downward tip
+    let head = [
+        egui::pos2(px - 5.0, top),
+        egui::pos2(px + 5.0, top),
+        egui::pos2(px + 5.0, tip - 5.0),
+        egui::pos2(px, tip),
+        egui::pos2(px - 5.0, tip - 5.0),
+    ];
+    ruler_painter.add(egui::Shape::convex_polygon(head.to_vec(), color, Stroke::NONE));
+    // A path, not a line segment: egui rounds line segments to whole pixels, so while playing
+    // the line would move in uneven pixel steps and part from its head
+    painter.add(egui::Shape::line(
+        vec![egui::pos2(px, tip), egui::pos2(px, track_bottom)],
+        Stroke::new(1.0, color),
+    ));
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MarkerPart {
+    Whole,
+    Left,
+    Right,
+}
+
+/// Paint FilmCraft's precision pentagonal marker glyph (chapters, sequence markers, keyframes).
+pub fn marker_glyph(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    tip_height: f32,
+    part: MarkerPart,
+    color: Color32,
+) {
+    let x = rect.center().x;
+    let y = rect.top();
+    let shoulder = rect.bottom() - tip_height;
+    let points = match part {
+        MarkerPart::Whole => vec![
+            egui::pos2(rect.left(), y),
+            egui::pos2(rect.right(), y),
+            egui::pos2(rect.right(), shoulder),
+            egui::pos2(x, rect.bottom()),
+            egui::pos2(rect.left(), shoulder),
+        ],
+        MarkerPart::Left => vec![
+            egui::pos2(rect.left(), y),
+            egui::pos2(x, y),
+            egui::pos2(x, rect.bottom()),
+            egui::pos2(rect.left(), shoulder),
+        ],
+        MarkerPart::Right => vec![
+            egui::pos2(x, y),
+            egui::pos2(rect.right(), y),
+            egui::pos2(rect.right(), shoulder),
+            egui::pos2(x, rect.bottom()),
+        ],
+    };
+    painter.add(egui::Shape::convex_polygon(points, color, Stroke::NONE));
+}
+
+/// FilmCraft dropdown text selector ("Fit ▾", "1/2 ▾") with 4px corner radius and field tokens.
+pub fn dropdown_text(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    text: &str,
+    t: &Tokens,
+    id: egui::Id,
+) -> egui::Response {
+    let resp = ui.interact(rect, id, egui::Sense::click());
+    ui.painter().rect_filled(rect, 4.0, t.field_bg);
+    ui.painter().rect_stroke(
+        rect,
+        4.0,
+        Stroke::new(
+            1.0,
+            if resp.hovered() { t.accent } else { t.field_border },
+        ),
+        egui::StrokeKind::Inside,
+    );
+    let rtl = ui.layout().main_dir() == egui::Direction::RightToLeft;
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let label_rect = if rtl { rect.shrink2(egui::vec2(8.0, 0.0)).translate(egui::vec2(12.0, 0.0)) }
+        else { rect.shrink2(egui::vec2(8.0, 0.0)) };
+    let painter = ui.painter().with_clip_rect(label_rect.intersect(rect).intersect(ui.clip_rect()));
+    painter.text(egui::pos2(if rtl { rect.right()-9.0 } else { rect.left()+9.0 }, rect.center().y),
+        if rtl { egui::Align2::RIGHT_CENTER } else { egui::Align2::LEFT_CENTER }, text, font, t.text);
+    let chevron_x = if rtl { rect.left()+11.0 } else { rect.right()-11.0 };
+    super::control_density::paint_chevron(ui,
+        egui::Rect::from_center_size(egui::pos2(chevron_x, rect.center().y), egui::vec2(14.0,14.0)), t.text_dim);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, resp.enabled(), text));
+    resp
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn filmcraft_restored_monitor_art_has_real_pentagon_rings_and_bounded_paint() {
+        for scale in [1.0,1.5,2.0] {
+            let ctx=egui::Context::default();ctx.set_pixels_per_point(scale);
+            let output=ctx.run_ui(egui::RawInput::default(),|ui| {
+                let (_,response)=ui.allocate_exact_size(egui::vec2(400.0,28.0),egui::Sense::click_and_drag());
+                super::paint_monitor_seek(ui,&response,0.4375,Some(0.75));
+                super::paint_monitor_volume(ui,&response,0.5);
+            });
+            assert!(output.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Path(p) if p.closed && p.points.len()==5)),"live monitor lost its pentagonal playhead");
+            assert!(output.shapes.iter().filter(|s|matches!(&s.shape,egui::Shape::Circle(_))).count()>=6,"terminal and volume rings lost");
+            output.drop_without_applying_deltas();
+        }
+    }
     use super::*;
+
+    #[test]
+    fn filmcraft_ruler_labels_are_centered_and_fractional_frames_use_actual_rate() {
+        let ctx = egui::Context::default();
+        let tokens = Tokens::for_kind(ThemeKind::Dark);
+        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 30.0));
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            paint_frame_ruler(&ui.painter().with_clip_rect(rect), rect, 0.0, 100.0, 23.976, &tokens);
+        });
+        let ticks: Vec<_> = output.shapes.iter().filter_map(|shape| match &shape.shape {
+            egui::Shape::LineSegment { points, .. } => Some(points[0].x), _ => None,
+        }).collect();
+        assert!(ticks.len() > 10);
+        // Nominal 24-frame major tick is slightly after 1s at 23.976fps.
+        let expected = (24.0 / 23.976 * 100.0) as f32;
+        assert!(ticks.iter().any(|x| (*x-expected).abs() < 0.01));
+        let mut labels = 0;
+        for shape in &output.shapes {
+            if let egui::Shape::Text(text) = &shape.shape {
+                let center = text.pos.x + text.galley.size().x/2.0;
+                assert!(ticks.iter().any(|x| (*x-center).abs() < 0.01));
+                assert!(rect.contains_rect(egui::Rect::from_min_size(text.pos, text.galley.size())));
+                labels += 1;
+            }
+        }
+        assert!(labels >= 3);
+        output.drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn filmcraft_playhead_head_stays_in_ruler_and_stem_begins_at_track_boundary() {
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let ruler = egui::Rect::from_min_max(egui::pos2(0.0,0.0), egui::pos2(800.0,30.0));
+            paint_filmcraft_playhead(ui.painter(), &ui.painter().with_clip_rect(ruler),
+                150.25, 17.0, 30.0, 300.0, Color32::RED);
+        });
+        let paths: Vec<_> = output.shapes.iter().filter_map(|shape| match &shape.shape {
+            egui::Shape::Path(path) => Some(path), _ => None,
+        }).collect();
+        assert_eq!(paths.len(), 2);
+        assert!(paths[0].points.iter().all(|point| point.y >= 17.0 && point.y <= 30.0));
+        assert_eq!(paths[1].points, vec![egui::pos2(150.25,30.0), egui::pos2(150.25,300.0)]);
+        output.drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn filmcraft_subsecond_ruler_never_repeats_whole_second_labels() {
+        let ctx = egui::Context::default();
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0,30.0));
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            paint_frame_ruler(&ui.painter().with_clip_rect(rect), rect, 0.0, 500.0, 24.0,
+                &Tokens::for_kind(ThemeKind::Dark));
+        });
+        let labels: Vec<_> = output.shapes.iter().filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.text().to_owned()), _ => None,
+        }).collect();
+        assert!(labels.len() >= 3);
+        assert!(labels.windows(2).all(|pair| pair[0] != pair[1]), "{labels:?}");
+        assert!(labels.iter().any(|label| label.contains('.')));
+        output.drop_without_applying_deltas();
+    }
 
     #[test]
     fn selected_craft_icons_contrast_with_bright_and_dark_fills() {
@@ -808,5 +1224,92 @@ mod tests {
         assert_eq!(framed.normal.fill, dark.panel_bg);
         assert_eq!(framed.normal.stroke.color, dark.field_border);
         assert_eq!(framed.hovered.stroke.color, dark.field_border);
+    }
+
+    #[test]
+    fn icon_button_helpers_render_with_filmcraft_metrics() {
+        let ctx = egui::Context::default();
+        let config = crate::config::AppConfig::default();
+        crate::ui::configure_native_visuals(&ctx, &config);
+
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let res = icon_button_glyph(ui, "Test Mute", "M", egui::vec2(28.0, 28.0), false, true);
+            assert_eq!(res.rect.size(), egui::vec2(28.0, 28.0));
+
+            let res_selected = icon_button_glyph(ui, "Test Mute Active", "M", egui::vec2(24.0, 24.0), true, false);
+            assert_eq!(res_selected.rect.size(), egui::vec2(24.0, 24.0));
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn ruler_steps_computes_filmcraft_tick_and_label_ladder() {
+        // High zoom: 20 pixels per frame at 30 fps
+        let (minor, label) = ruler_steps(20.0, 30);
+        assert!(minor >= 1);
+        assert!(label >= minor);
+        assert_eq!(label % minor, 0);
+        assert!(label as f64 * 20.0 >= 110.0);
+        assert!(minor as f64 * 20.0 >= 12.0);
+
+        // Medium zoom: 1 pixel per frame at 30 fps (30 px / sec)
+        let (minor, label) = ruler_steps(1.0, 30);
+        assert_eq!(label % minor, 0);
+        assert!(label as f64 * 1.0 >= 110.0);
+        assert!(minor as f64 * 1.0 >= 12.0);
+
+        // Low zoom: 0.05 pixels per frame at 30 fps (1.5 px / sec)
+        let (minor, label) = ruler_steps(0.05, 30);
+        assert_eq!(label % minor, 0);
+        assert!(label as f64 * 0.05 >= 110.0);
+        assert!(minor as f64 * 0.05 >= 12.0);
+    }
+
+    #[test]
+    fn zoom_thumb_part_resolves_handles_middle_and_beside() {
+        let thumb = egui::Rect::from_min_max(egui::pos2(100.0, 10.0), egui::pos2(200.0, 30.0));
+
+        // Outside vertically or far horizontally
+        assert_eq!(ZoomThumbPart::at(thumb, egui::pos2(50.0, 20.0)), ZoomThumbPart::Beside);
+        assert_eq!(ZoomThumbPart::at(thumb, egui::pos2(250.0, 20.0)), ZoomThumbPart::Beside);
+
+        // Near left edge (within 9 pt)
+        assert_eq!(ZoomThumbPart::at(thumb, egui::pos2(103.0, 20.0)), ZoomThumbPart::Left);
+
+        // Near right edge (within 9 pt)
+        assert_eq!(ZoomThumbPart::at(thumb, egui::pos2(196.0, 20.0)), ZoomThumbPart::Right);
+
+        // In the middle
+        assert_eq!(ZoomThumbPart::at(thumb, egui::pos2(150.0, 20.0)), ZoomThumbPart::Middle);
+    }
+
+    #[test]
+    fn zoom_thumb_travel_and_width_bounds() {
+        let bar = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 20.0));
+        let (left, w, per_point) = zoom_thumb(bar, 60.0, 0.0, 100.0);
+        assert_eq!(left, 0.0);
+        assert!(w >= MIN_THUMB_W);
+        assert!(w <= 500.0);
+        assert!(per_point >= 0.0);
+    }
+
+    #[test]
+    fn marker_glyph_and_dropdown_text_render_with_craft_tokens() {
+        let ctx = egui::Context::default();
+        let config = crate::config::AppConfig::default();
+        crate::ui::configure_native_visuals(&ctx, &config);
+        let tokens = current(&ctx);
+
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let rect = egui::Rect::from_min_size(egui::pos2(10.0, 10.0), egui::vec2(70.0, 24.0));
+            let resp = dropdown_text(ui, rect, "Fit", &tokens, egui::Id::unique("test_fit"));
+            assert_eq!(resp.rect, rect);
+
+            let marker_rect = egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(7.0, 10.0));
+            marker_glyph(ui.painter(), marker_rect, 3.0, MarkerPart::Whole, egui::Color32::from_rgb(0x38, 0x8e, 0x3c));
+            marker_glyph(ui.painter(), marker_rect, 3.0, MarkerPart::Left, egui::Color32::from_rgb(0xc2, 0x18, 0x5b));
+            marker_glyph(ui.painter(), marker_rect, 3.0, MarkerPart::Right, egui::Color32::from_rgb(0x00, 0x97, 0xa7));
+        });
+        output.textures_delta.clear();
     }
 }
