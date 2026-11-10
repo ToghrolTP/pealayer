@@ -31,9 +31,11 @@ static void table_mouse(ps_session *s,const ps_mouse_event *e) {
     if(s->editing){
         if(button==2&&!drag){ps_key(s,27);return;}
         if(s->control_view&&s->dialog&&!drag){
-            unsigned w=min(60,s->io.columns-6),left=(s->io.columns-w)/2+1,top=(s->io.rows-9)/2+1;
-            if(y==top+7&&x>=left+3&&x<left+26){
-                s->dialog_focus=x<left+13?1:2;ps_key(s,13);return;
+            ControlDialogBox box=control_dialog_box(s);
+            if(box.titlebar&&y==box.y+1&&x==box.x+box.width-4){ps_key(s,27);return;}
+            if((y==box.buttons||(box.framed&&y+1>=box.buttons&&y<=box.buttons+1))){
+                if(x>=box.accept&&x<box.accept+(box.framed?CONTROL_BUTTON_WIDTH:9)){s->dialog_focus=1;ps_key(s,13);return;}
+                if(x>=box.cancel&&x<box.cancel+(box.framed?CONTROL_BUTTON_WIDTH:10)){s->dialog_focus=2;ps_key(s,13);return;}
             }
         }
         if(y==s->mouse_edit_y&&x>=s->mouse_edit_x&&x<s->mouse_edit_x+s->mouse_edit_width){

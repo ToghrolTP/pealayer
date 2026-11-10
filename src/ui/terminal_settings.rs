@@ -131,11 +131,21 @@ pub fn snapshot(config: &crate::config::AppConfig) -> Vec<Setting> {
             });
         }
     }
+    // The shared contract interleaves some native layout groups. A table has
+    // explicit group headings, so keep each group contiguous, preserving its
+    // first advertised position and the order of controls within it.
+    let mut groups = Vec::new();
+    for entry in &result {
+        let group = (entry.section.clone(), entry.group.clone());
+        if !groups.contains(&group) {
+            groups.push(group);
+        }
+    }
     result.sort_by_key(|entry| {
-        sections
-            .iter()
-            .position(|section| section.id == entry.section)
-            .unwrap_or(usize::MAX)
+        (
+            sections.iter().position(|section| section.id == entry.section).unwrap_or(usize::MAX),
+            groups.iter().position(|(section, group)| section == &entry.section && group == &entry.group).unwrap_or(usize::MAX),
+        )
     });
     let mut keys = std::collections::HashSet::new();
     result.retain(|entry| keys.insert(entry.key.clone()));
@@ -220,6 +230,19 @@ pub fn patch(
 #[cfg(all(test, feature = "workspace-terminal"))]
 mod tests {
     use super::*;
+    #[test]
+    fn table_groups_do_not_repeat_after_other_groups() {
+        let entries = snapshot(&crate::config::AppConfig::default());
+        let mut seen = std::collections::HashSet::new();
+        let mut previous = None;
+        for entry in entries {
+            let group = (entry.section, entry.group);
+            if previous.as_ref() != Some(&group) {
+                assert!(seen.insert(group.clone()), "repeated table group: {group:?}");
+                previous = Some(group);
+            }
+        }
+    }
     #[test]
     fn catalog_uses_real_preferences_labels_choices_and_sections_without_secrets() {
         let config = crate::config::AppConfig::default();

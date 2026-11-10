@@ -44,6 +44,11 @@ function Native([string]$method,$params=@{}) {
 function Control($operation) {
     Invoke-RestMethod -NoProxy "http://127.0.0.1:$Port/api/terminal/control" -Method Post -ContentType application/json -Headers @{Authorization="Bearer $key"} -Body ($operation|ConvertTo-Json -Compress) -TimeoutSec 8
 }
+function ScreenText($snapshot) { ($snapshot.screen.lines | ForEach-Object {($_ | ForEach-Object text) -join ''}) -join "`n" }
+function AwaitScreen([string]$pattern) {
+    for($n=0;$n -lt 60;$n++){$value=Control @{operation='snapshot'};if((ScreenText $value) -match $pattern){return $value};Start-Sleep -Milliseconds 50}
+    throw "Expected shell screen pattern was not rendered: $pattern"
+}
 function Denied([string]$path,$body,$headers=@{}) {
     $response=Invoke-WebRequest -NoProxy -SkipHttpErrorCheck "http://127.0.0.1:$Port$path" -Method Post -ContentType application/json -Headers $headers -Body ($body|ConvertTo-Json -Depth 16 -Compress) -TimeoutSec 8
     if($response.StatusCode -notin @(400,403)){throw "Expected denial at $path, got $($response.StatusCode)"}
@@ -76,6 +81,14 @@ try {
     $table=$false
     for($n=0;$n -lt 60;$n++){$snapshot=Control @{operation='snapshot'};if($snapshot.screen.alternate){$table=$true;break};Start-Sleep -Milliseconds 50}
     if(-not $table){throw 'Upstream settings table did not render.'}
+    $null=AwaitScreen 'Color palette'
+    $null=Control @{operation='input';id=$id;data="`e[17~"}
+    $null=AwaitScreen 'color_palette'
+    $null=Control @{operation='input';id=$id;data="`e[17~"}
+    $null=AwaitScreen 'Color palette'
+    $null=Control @{operation='input';id=$id;data="`r"}
+    $null=AwaitScreen 'System[\s\S]*Light[\s\S]*Dark'
+    $null=Control @{operation='input';id=$id;data="`e"}
     $other=Control @{operation='create';target='portable_shell'};$otherId=[long]$other.screen.id;$owned.Add($otherId)
     $null=Control @{operation='select';id=$id};$after=Control @{operation='close';id=$otherId};$owned.Remove($otherId)|Out-Null
     if($after.screen.id -ne $id){throw 'Closing another session changed the active identity.'}
@@ -89,7 +102,7 @@ try {
     if(($public|ConvertTo-Json -Depth 16) -match 'Pealayer settings|ui.terminal.font_size|lines'){throw 'Private screen leaked into general workspace status.'}
     $null=Native 'pealayer.terminal.revoke'
     Denied '/api/terminal/control' @{operation='snapshot'} @{Authorization="Bearer $key"}
-    Write-Host 'PASS: native/HTTP shared sessions, real get/set table, selected-ID preservation, default shell denial, security-policy denial, invalid-ID denial, origin isolation, privacy and revocation.'
+    Write-Host 'PASS: native/HTTP shared sessions, real get/set table, readable/key presentation, choice popup, selected-ID preservation, default shell denial, security-policy denial, invalid-ID denial, origin isolation, privacy and revocation.'
     [pscustomobject]@{ProcessId=$process.Id;Port=$Port;ConfigPath=$configPath;KeepOpen=[bool]$KeepOpen}
 } finally {
     if($process -and -not $KeepOpen) {

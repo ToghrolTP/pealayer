@@ -1828,6 +1828,23 @@ pub fn tick(app: &mut crate::app::PealayerApp, ctx: &egui::Context) {
                     Err(error) => Err(error),
                 }
             } else {
+                let report = if crate::peer::active() && !crate::peer::mirroring() {
+                    shell_status.clone()
+                } else {
+                    // Explicit command only: this closes the one-frame gap
+                    // between decoder confirmation and public status publish.
+                    let observed = super::shell_status::Observed {
+                        idle: app.mpv.get_property("idle-active").ok(),
+                        paused: app.mpv.get_property("pause").ok(),
+                        position: app.mpv.get_property("time-pos").ok(),
+                        seeking: None,
+                        volume: app.mpv.get_property("volume").ok(),
+                        muted: app.mpv.get_property("mute").ok(),
+                    };
+                    let mut report = shell_status.clone().with_observation(&observed);
+                    report.duration = app.mpv.get_property("duration").unwrap_or(report.duration);
+                    report
+                };
                 if let Some(view) = app
                     .terminal_state
                     .views
@@ -1835,7 +1852,7 @@ pub fn tick(app: &mut crate::app::PealayerApp, ctx: &egui::Context) {
                     .find(|view| view.id == id)
                 {
                     view.send(super::terminal_backend::Input::StatusReport(
-                        shell_status.clone(),
+                        report,
                     ));
                 }
                 continue;

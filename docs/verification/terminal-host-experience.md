@@ -11,7 +11,7 @@ Continuation: [#80](https://github.com/ToghrolTP/pealayer/issues/80).
 - Terminal has a dedicated Preferences page. Its menu and screen context menu
   navigate there directly. Cursor shape, blinking, command-accent coloring,
   font size, scrollback, default target and security are configurable.
-- The built-in session is named **Pealayer Shell**. The pinned PortableShell
+- The built-in session is named **Pealayer Shell**. The upstream PortableShell
   framework is embedded, not launched as an
   executable. Its multiline prompt, categorized help/usage, command and setting
   completion, F7 history, bracketed paste and editable settings registry are used.
@@ -56,7 +56,13 @@ completion rollover/history, distinct prompt/table mouse ownership and no static
 introductory narration. OS-specific demos, firmware controls and sample data are
 not imported as fake Pealayer capabilities. Vendored files come from the verified
 owner checkpoint recorded in `third_party/portable-shell/PEALAYER-VENDOR.md`;
-the small application adapter supplies Pealayer metadata and callbacks.
+the small application adapter supplies Pealayer metadata and callbacks. Shared
+sources follow canonical upstream main at reviewed integration checkpoints, not
+an indefinite handoff pin; exact resolved identities remain build receipts.
+The owner-provided dialog title/close and framed Apply/Cancel actions are enabled.
+Settings groups remain contiguous while retaining the shared catalog's group
+and control order. Immediate status reports reconcile decoder properties so an
+acknowledged pause does not briefly report the previous published UI state.
 
 ### Editable choices and explicit accent protocol
 

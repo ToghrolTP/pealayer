@@ -135,6 +135,7 @@ int ph_editor_open(ph_editor *e,ps_session *s){
 }
 void ph_shell_style(ps_session *s){
     ps_set_semantic_accent(s,1,(1u<<PS_INK_HEADING)|(1u<<PS_INK_ACTION)|(1u<<PS_INK_COMMAND));
+    ps_set_dialog_style(s,PS_DIALOG_TITLE_BAR|PS_DIALOG_FRAMED_BUTTONS);
 }
 void ph_help_setup(ps_session *s){
     static const ps_help_item args[]={{"KEY","Stable setting key; Tab completes names"},{"VALUE","Validated value; quote JSON or text containing spaces"}};

@@ -194,6 +194,12 @@ struct ps_session {
     ps_config io;
     unsigned theme; /* Legacy palette IDs 0..3; semantic roles are the default (4). */
     unsigned table_style;
+#if PS_BORDER_STYLES
+    unsigned border_style;
+#endif
+#if PS_DIALOG_STYLES
+    unsigned dialog_style;
+#endif
     char selection_marker[32];
     unsigned selection_marker_override;
     const ps_panel *panel;
@@ -378,6 +384,9 @@ static void ink(ps_session *s, unsigned kind) {
     if(PS_OSC&&!(s->io.flags&PS_NO_OSC)&&s->semantic_accent&&(kind==PS_INK_ACCENT||(kind<=PS_INK_ACCENT&&(s->accent_roles&(1u<<kind)))))
         color(s,PS_SEMANTIC_ACCENT_SEQUENCE);
 #endif
+}
+static const char *frame_glyph(ps_session *s,unsigned part){
+    return ps_border_glyph(ps_get_border_style(s),!!(s->io.flags&PS_UNICODE),part);
 }
 PS_API void ps_set_semantic_accent(ps_session *s,int enabled,unsigned role_mask){
 #if PS_SEMANTIC_ACCENT
@@ -841,6 +850,35 @@ PS_API void ps_set_table_style(ps_session *s, unsigned flags) {
     s->table_style = flags & (PS_TABLE_GRID | PS_TABLE_RED_BORDER | PS_TABLE_TITLE_BAR | layout);
     s->dirty = 1;
 }
+PS_API int ps_set_border_style(ps_session *s,unsigned style){
+    if(!s||!ps_border_style_valid(style))return 0;
+#if PS_BORDER_STYLES
+    if(s->border_style!=style){s->border_style=style;s->canvas_kind=0;s->dirty=1;}
+#endif
+    return 1;
+}
+PS_API unsigned ps_get_border_style(const ps_session *s){
+#if PS_BORDER_STYLES
+    return s?s->border_style:PS_BORDER_ROUNDED;
+#else
+    (void)s;return PS_BORDER_ROUNDED;
+#endif
+}
+PS_API int ps_set_dialog_style(ps_session *s,unsigned flags){
+    if(!s||flags&~(PS_DIALOG_TITLE_BAR|PS_DIALOG_FRAMED_BUTTONS))return 0;
+#if PS_DIALOG_STYLES
+    s->dialog_style=flags;s->dirty=1;return 1;
+#else
+    return flags==0;
+#endif
+}
+PS_API unsigned ps_get_dialog_style(const ps_session *s){
+#if PS_DIALOG_STYLES
+    return s?s->dialog_style:0;
+#else
+    (void)s;return 0;
+#endif
+}
 PS_API unsigned ps_alignof_session(void) {
     struct A {
         char c;
@@ -861,6 +899,9 @@ PS_API ps_session *ps_init(void *memory, unsigned bytes, const ps_config *c) {
     s->history_limit = PS_HISTORY;
     s->io = *c;
     s->table_style = PS_TABLE_DEFAULT;
+#if PS_BORDER_STYLES
+    s->border_style=ps_border_style_valid(PS_BORDER_DEFAULT)?PS_BORDER_DEFAULT:PS_BORDER_ROUNDED;
+#endif
     s->menu_style=PS_MENU_TABLE|PS_MENU_NUMBERS;s->document_style=PS_EDITOR_HEADER;
     s->theme = PS_THEME_DEFAULT;
 #ifdef PS_ASCII_ONLY
@@ -952,7 +993,7 @@ static Grid grid_for(ps_session *s) {
 }
 static void grid_vertical(ps_session *s) {
     ink(s, 7);
-    out(s, (s->io.flags & PS_UNICODE) ? "│" : "|");
+    out(s,frame_glyph(s,PS_BORDER_OUTER_VERTICAL));
 }
 static unsigned table_border_titles(const ps_session *s) {
     if(PS_SECTION_BORDER_TITLES && PS_CONTROL_SECTION_ROWS && s->control_view &&
@@ -973,7 +1014,7 @@ static unsigned table_slots(const ps_session *s) {
 static void grid_divide(ps_session *s) {
     out(s, " ");
     if (s->table_style & PS_TABLE_GRID)
-        grid_vertical(s);
+        {ink(s,PS_INK_BORDER);out(s,frame_glyph(s,PS_BORDER_INNER_VERTICAL));}
     else
         out(s, " ");
     out(s, " ");
@@ -988,20 +1029,20 @@ static void grid_text(ps_session *s, const char *text, unsigned width_) {
 }
 static void grid_border(ps_session *s, const Grid *g, unsigned kind, int joined) {
     unsigned i, j;
-    const char *left = kind == 0 ? "╭" : kind == 2 ? "╰" : "├";
-    const char *right = kind == 0 ? "╮" : kind == 2 ? "╯" : "┤";
-    const char *middle = kind == 0 || kind == 4 ? "┬" : (kind == 2 || kind == 3) ? "┴" : "┼";
+    unsigned left=kind==0?PS_BORDER_TOP_LEFT:kind==2?PS_BORDER_BOTTOM_LEFT:PS_BORDER_MIDDLE_LEFT;
+    unsigned right=kind==0?PS_BORDER_TOP_RIGHT:kind==2?PS_BORDER_BOTTOM_RIGHT:PS_BORDER_MIDDLE_RIGHT;
+    unsigned horizontal=kind==0?PS_BORDER_TOP:kind==2?PS_BORDER_BOTTOM:PS_BORDER_HORIZONTAL;
+    unsigned middle=kind==0?PS_BORDER_TOP_JOIN:kind==2?PS_BORDER_BOTTOM_JOIN:
+        kind==4?PS_BORDER_JOIN_DOWN:kind==3?PS_BORDER_JOIN_UP:PS_BORDER_CROSS;
     ink(s, 7);
-    out(s, (s->io.flags & PS_UNICODE) ? left : "+");
+    out(s,frame_glyph(s,left));
     for (i = 0; i < g->count; ++i) {
         for (j = 0; j < g->widths[i] + 2; ++j)
-            out(s, (s->io.flags & PS_UNICODE) ? "─" : "-");
+            out(s,frame_glyph(s,horizontal));
         if (i + 1 < g->count)
-            out(s, (s->io.flags & PS_UNICODE)
-                       ? ((joined && (s->table_style & PS_TABLE_GRID)) ? middle : "─")
-                       : ((joined && (s->table_style & PS_TABLE_GRID)) ? "+" : "-"));
+            out(s,frame_glyph(s,joined&&(s->table_style&PS_TABLE_GRID)?middle:horizontal));
     }
-    out(s, (s->io.flags & PS_UNICODE) ? right : "+");
+    out(s,frame_glyph(s,right));
     reset(s);
 }
 static void table_open(ps_session *s, unsigned tab) {
@@ -1192,7 +1233,7 @@ static void render(ps_session *s) {
     if(inside){at(s,5,2);grid_border(s,&grid,4,1);}
     at(s, 5+inside, 2);
     ink(s, 7);
-    out(s, (s->io.flags & PS_UNICODE) ? "│" : "|");
+    out(s,frame_glyph(s,PS_BORDER_OUTER_VERTICAL));
     out(s, " ");
     for (i = 0; i < grid.count; ++i) {
         ink(s, 6);
@@ -1202,7 +1243,7 @@ static void render(ps_session *s) {
     }
     ink(s, 7);
     out(s, " ");
-    out(s, (s->io.flags & PS_UNICODE) ? "│" : "|");
+    out(s,frame_glyph(s,PS_BORDER_OUTER_VERTICAL));
     reset(s);
     if(!table_border_titles(s)) {
         at(s, 6+inside, 2);
@@ -1235,7 +1276,7 @@ static void render(ps_session *s) {
             grid_border(s,&grid,rule==0x4000?3:4,joined);continue;
         }
         ink(s, 7);
-        out(s, (s->io.flags & PS_UNICODE) ? "│" : "|");
+        out(s,frame_glyph(s,PS_BORDER_OUTER_VERTICAL));
         if (heading) {
             surface(s, s->control_header && s->selected == idx ? 1 : 0);
             if (!(s->io.flags & PS_COLOR) && s->control_header && s->selected == idx) ansi(s,"\033[7m");
@@ -1268,7 +1309,7 @@ static void render(ps_session *s) {
         }
         ink(s, 7);
         out(s, " ");
-        out(s, (s->io.flags & PS_UNICODE) ? "│" : "|");
+        out(s,frame_glyph(s,PS_BORDER_OUTER_VERTICAL));
         reset(s);
     }
     if(gutter)for(i=0;i<slots;++i){at(s,body+i,w);reset(s);spaces(s,gutter);}
@@ -1513,7 +1554,7 @@ static void prompt(ps_session *s) {
         avail=avail>4?avail-4:1;
         view_rule_color(s,s->io.rows-2,1,s->io.columns-1,0,border);
         view_rule_color(s,s->io.rows,1,s->io.columns-1,1,border);
-        at(s,s->io.rows-1,1);ink(s,PS_INK_BORDER);out(s,(s->io.flags&PS_UNICODE)?"│ ":"| ");reset(s);
+        at(s,s->io.rows-1,1);ink(s,PS_INK_BORDER);out(s,frame_glyph(s,PS_BORDER_OUTER_VERTICAL));out(s," ");reset(s);
     }
 #if PS_COMPLETION_MENU
     if(!table_prompt(s)){
@@ -1578,7 +1619,7 @@ static void prompt(ps_session *s) {
         ps_secure_clear(s->suggestion, sizeof s->suggestion);
     ansi(s, "\033[K\r");
     if(table_prompt_framed(s)) {
-        at(s,s->io.rows-1,s->io.columns-1);ink(s,PS_INK_BORDER);out(s,(s->io.flags&PS_UNICODE)?"│":"|");reset(s);
+        at(s,s->io.rows-1,s->io.columns-1);ink(s,PS_INK_BORDER);out(s,frame_glyph(s,PS_BORDER_OUTER_VERTICAL));reset(s);
     }
     ansi(s,"\033[");
     ps_number(s, prompt_width + cells(s->line + start, s->pos - start, s->io.flags) + 1+(table_prompt_framed(s)?2:0));
@@ -1597,7 +1638,7 @@ static void prompt(ps_session *s) {
         ansi(s,"\033[K");
         if(table_prompt_framed(s)) {
             ansi(s,"\0337");at(s,s->io.rows-1,s->io.columns-1);ink(s,PS_INK_BORDER);
-            out(s,(s->io.flags&PS_UNICODE)?"│":"|");reset(s);ansi(s,"\0338");
+            out(s,frame_glyph(s,PS_BORDER_OUTER_VERTICAL));reset(s);ansi(s,"\0338");
         }
     }
     if(table_prompt(s))ansi(s,s->table_prompt_focus?"\033[?25h":"\033[?25l");

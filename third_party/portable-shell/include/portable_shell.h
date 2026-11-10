@@ -13,6 +13,7 @@
 #ifndef PORTABLE_SHELL_H
 #define PORTABLE_SHELL_H
 #include "portable_util.h"
+#include "portable_border.h"
 #include "portable_table_policy.h"
 #ifndef PS_MOUSE
 #define PS_MOUSE 1
@@ -294,6 +295,16 @@ enum { PS_TABLE_GRID = 1, PS_TABLE_RED_BORDER = 2, PS_TABLE_TITLE_BAR = 4,
 PS_API unsigned ps_layout_columns(unsigned width, const ps_column *columns, unsigned count,
                                   unsigned *widths);
 PS_API void ps_set_table_style(ps_session *, unsigned flags);
+/* Changes drawing only; dimensions, cell origins and hit regions stay fixed. */
+PS_API int ps_set_border_style(ps_session *,unsigned style);
+PS_API unsigned ps_get_border_style(const ps_session *);
+#ifndef PS_DIALOG_STYLES
+#define PS_DIALOG_STYLES 1
+#endif
+enum { PS_DIALOG_TITLE_BAR=1, PS_DIALOG_FRAMED_BUTTONS=2 };
+/* Opt-in title bar/close button and three-row button frames for table dialogs. */
+PS_API int ps_set_dialog_style(ps_session *,unsigned flags);
+PS_API unsigned ps_get_dialog_style(const ps_session *);
 /* Marker is copied into session storage; empty removes its reserved label cells. */
 /* NULL restores automatic selection marker; empty string explicitly hides it. */
 PS_API void ps_set_selection_marker(ps_session *, const char *marker);

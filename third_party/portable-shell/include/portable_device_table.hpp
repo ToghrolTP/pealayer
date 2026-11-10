@@ -231,18 +231,34 @@ bool mouse(const ps_mouse_event &e,const Snapshot &s,Action &a){
 template<class W> void base(Writer<W> &out) const {if(ansi_)out.raw(ps_style_base(theme_,trueColor_));}
 template<class W> void ink(Writer<W> &out,unsigned role) const {if(ansi_)out.raw(ps_style_ink(theme_,trueColor_,theme_!=Default,role));}
 template<class W> void edge(Writer<W> &out,const Snapshot &s,const char *unicode,const char *ascii) const {
-    base(out);ink(out,7);out.raw(s.unicode?unicode:ascii);base(out);
+    base(out);ink(out,7);
+    if(!s.unicode)out.raw(ascii);
+    else{const unsigned length=unsigned(ps_text_length(unicode));const bool inner=length>1&&unicode[0]==' '&&unicode[length-1]==' ';
+        for(const char *p=unicode;*p;){char glyph[4]={*p,0,0,0};unsigned n=1;
+            if((uint8_t)*p==0xe2&&p[1]&&p[2]){glyph[1]=p[1];glyph[2]=p[2];n=3;}
+            unsigned part=ps_border_light_part(glyph);
+            if(part==PS_BORDER_TOP)part=PS_BORDER_HORIZONTAL;
+            if(inner&&part==PS_BORDER_OUTER_VERTICAL)part=PS_BORDER_INNER_VERTICAL;
+            out.raw(part<PS_BORDER_PART_COUNT?ps_border_glyph(borderStyle(),true,part):glyph);p+=n;
+        }}
+    base(out);
 }
 template<class W> void rule(Writer<W> &out,const Snapshot &s,unsigned width,const char *left,const char *right,bool newline=true) const {
-    base(out);ink(out,7);out.raw(s.unicode?left:"+");
-    for(unsigned i=0;i<width-2;++i)out.raw(s.unicode?"\xe2\x94\x80":"-");
-    out.raw(s.unicode?right:"+");base(out);if(newline)out.raw("\r\n");
+    const unsigned part=ps_border_light_part(left),horizontal=part==PS_BORDER_TOP_LEFT?PS_BORDER_TOP:part==PS_BORDER_BOTTOM_LEFT?PS_BORDER_BOTTOM:PS_BORDER_HORIZONTAL;
+    base(out);ink(out,7);out.raw(ps_border_glyph(borderStyle(),s.unicode,part));
+    for(unsigned i=0;i<width-2;++i)out.raw(ps_border_glyph(borderStyle(),s.unicode,horizontal));
+    out.raw(ps_border_glyph(borderStyle(),s.unicode,ps_border_light_part(right)));base(out);if(newline)out.raw("\r\n");
 }
 template<class W> void gridRule(Writer<W> &out,const Snapshot &s,unsigned w,unsigned group,unsigned label,const char *junction,const char *left,const char *right) const {
-    base(out);ink(out,7);out.raw(s.unicode?left:"+");
+    const unsigned part=ps_border_light_part(left),horizontal=part==PS_BORDER_TOP_LEFT?PS_BORDER_TOP:part==PS_BORDER_BOTTOM_LEFT?PS_BORDER_BOTTOM:PS_BORDER_HORIZONTAL;
+    unsigned middle=ps_border_light_part(junction);
+    if(middle==PS_BORDER_TOP)middle=horizontal;
+    if(part!=PS_BORDER_TOP_LEFT&&middle==PS_BORDER_TOP_JOIN)middle=PS_BORDER_JOIN_DOWN;
+    if(part!=PS_BORDER_BOTTOM_LEFT&&middle==PS_BORDER_BOTTOM_JOIN)middle=PS_BORDER_JOIN_UP;
+    base(out);ink(out,7);out.raw(ps_border_glyph(borderStyle(),s.unicode,part));
     for(unsigned i=1;i<w-1;++i){const bool join=!PS_DEVICE_VIEW_PLAIN_ROWS&&(i==label+3+(group?group+3:0)||(group&&i==group+3));
-        out.raw(s.unicode?(join?junction:"\xe2\x94\x80"):(join?"+":"-"));}
-    out.raw(s.unicode?right:"+");base(out);out.raw("\r\n");
+        out.raw(ps_border_glyph(borderStyle(),s.unicode,join?middle:horizontal));}
+    out.raw(ps_border_glyph(borderStyle(),s.unicode,ps_border_light_part(right)));base(out);out.raw("\r\n");
 }
 template<class W> void value(Writer<W> &out,const Snapshot &s,const Row &r,unsigned width) const {
     if(r.secret){ink(out,0);out.field("[hidden]",width);return;}
@@ -498,7 +514,7 @@ template<class Write> bool renderTable(const Snapshot &s,Write write) {
                 const bool below=line+1>=total||!(logical[line+1]&0xe000);
                 for(unsigned col=4+markerWidth+n;col<w-1;++col){
                     const bool join=!PS_DEVICE_VIEW_PLAIN_ROWS&&col==labelWidth+3;
-                    out.raw(join?ps_table_junction(s.unicode,above,below):s.unicode?"─":"-");
+                    out.raw(ps_border_glyph(borderStyle(),s.unicode,join?(above?(below?PS_BORDER_CROSS:PS_BORDER_JOIN_UP):(below?PS_BORDER_JOIN_DOWN:PS_BORDER_HORIZONTAL)):PS_BORDER_HORIZONTAL));
                 }
                 edge(out,s,"┤","+");out.raw("\r\n");continue;
             }
@@ -561,21 +577,21 @@ template<class Write> bool renderTable(const Snapshot &s,Write write) {
             out.indent(0);out.raw("\x1b[H\x1b[2J");base(out);
             out.position(1,box.left);ink(out,PS_INK_HEADING);out.safe(editLabel_,box.width);
             auto line=[&](unsigned y,const char *left,const char *right){
-                out.position(y,box.left);ink(out,PS_INK_ERROR);out.raw(s.unicode?left:"+");
-                for(unsigned i=1;i<box.width-1;++i)out.raw(i==5?(s.unicode?(y==box.top?"┬":"┴"):"+"):(s.unicode?"─":"-"));
-                out.raw(s.unicode?right:"+");base(out);
+                out.position(y,box.left);ink(out,PS_INK_ERROR);out.raw(ps_border_glyph(borderStyle(),s.unicode,ps_border_light_part(left)));
+                for(unsigned i=1;i<box.width-1;++i)out.raw(ps_border_glyph(borderStyle(),s.unicode,i==5?(y==box.top?PS_BORDER_TOP_JOIN:PS_BORDER_BOTTOM_JOIN):(y==box.top?PS_BORDER_TOP:PS_BORDER_BOTTOM)));
+                out.raw(ps_border_glyph(borderStyle(),s.unicode,ps_border_light_part(right)));base(out);
             };
             line(box.top,"╭","╮");
             for(unsigned i=0;i<box.visible;++i){
                 const unsigned index=box.start+i;char number[12];numberText(number,index+1);
-                out.position(box.top+i+1,box.left);ink(out,PS_INK_ERROR);out.raw(s.unicode?"│":"|");base(out);
+                out.position(box.top+i+1,box.left);ink(out,PS_INK_ERROR);out.raw(ps_border_glyph(borderStyle(),s.unicode,PS_BORDER_OUTER_VERTICAL));base(out);
                 const bool selected=index==choiceIndex_;
                 if(selected)out.raw(trueColor_?"\x1b[48;2;229;192;123m\x1b[30m":"\x1b[43;30m");
                 else ink(out,PS_INK_TEXT);
-                out.raw(" ");out.field(number,3);base(out);ink(out,PS_INK_ERROR);out.raw(s.unicode?"│":"|");base(out);
+                out.raw(" ");out.field(number,3);base(out);ink(out,PS_INK_ERROR);out.raw(ps_border_glyph(borderStyle(),s.unicode,PS_BORDER_INNER_VERTICAL));base(out);
                 if(selected)out.raw(trueColor_?"\x1b[48;2;229;192;123m\x1b[30m":"\x1b[43;30m");else ink(out,PS_INK_TEXT);
                 out.raw(" ");out.field(choice->choiceLabels?choice->choiceLabels[index]:choice->choices[index],box.width-8);
-                base(out);ink(out,PS_INK_ERROR);out.raw(s.unicode?"│":"|");base(out);
+                base(out);ink(out,PS_INK_ERROR);out.raw(ps_border_glyph(borderStyle(),s.unicode,PS_BORDER_OUTER_VERTICAL));base(out);
             }
             line(box.top+box.visible+1,"╰","╯");
             out.position(s.lines-2,2);ink(out,PS_INK_MUTED);out.safe(notice_,s.columns-3);

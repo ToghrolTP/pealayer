@@ -19,6 +19,8 @@ fn build_embedded_terminal() {
         .file(format!("{root}/src/portable_shell.c"))
         .file("src/ui/portable_shell_editor.c")
         .define("PS_WORKBENCH", "0")
+        .define("PS_BORDER_STYLES", "1")
+        .define("PS_DIALOG_STYLES", "1")
         .std("c99")
         .flag_if_supported("-fno-builtin")
         .compile("pealayer_portable_shell");

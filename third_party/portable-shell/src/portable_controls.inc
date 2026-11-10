@@ -449,11 +449,11 @@ static void control_choice_draw(ps_session *s){
     for(i=0;i<b.visible+2+b.extra;++i){
         at(s,b.y+i,b.x);surface(s,2);ink(s,PS_INK_BORDER);
         if(i==0||i==b.visible+1){
-            out(s,unicode?(i?"╰":"╭") : "+");
-            for(j=0;j<b.width-2;++j)out(s,unicode?"─":"-");
-            out(s,unicode?(i?"╯":"╮") : "+");
+            out(s,frame_glyph(s,i?PS_BORDER_BOTTOM_LEFT:PS_BORDER_TOP_LEFT));
+            for(j=0;j<b.width-2;++j)out(s,frame_glyph(s,i?PS_BORDER_BOTTOM:PS_BORDER_TOP));
+            out(s,frame_glyph(s,i?PS_BORDER_BOTTOM_RIGHT:PS_BORDER_TOP_RIGHT));
         }else if(i<=b.visible){unsigned index=b.start+i-1,selected=index==s->choice_index;
-            out(s,unicode?"│":"|");
+            out(s,frame_glyph(s,PS_BORDER_OUTER_VERTICAL));
             if(selected){surface(s,1);if(!(s->io.flags&PS_COLOR))ansi(s,"\033[7m");}
             ink(s,selected?PS_INK_ACCENT:PS_INK_MUTED);out(s,selected?(unicode?" ❯ ":" > "):"   ");
             /* The marker identifies focus; the circle identifies the saved choice. */
@@ -466,7 +466,7 @@ static void control_choice_draw(ps_session *s){
                 if(!thumb)thumb=1;
                 unsigned top=b.start*(b.visible-thumb)/(c->choice_count-b.visible);
                 ink(s,PS_INK_ACCENT);out(s,unicode?(i-1>=top&&i-1<top+thumb?"┃":"│"):(i-1>=top&&i-1<top+thumb?"#":"|"));
-            }else out(s,unicode?"│":"|");
+            }else out(s,frame_glyph(s,PS_BORDER_OUTER_VERTICAL));
         }else{char range[32];ps_terminal_format(range,sizeof range,"%u-%u / %u",b.start+1,b.start+b.visible,c->choice_count);
             ink(s,PS_INK_MUTED);grid_text(s,i==b.visible+2&&c->choice_count>b.visible?range:s->notice,b.width);}
         reset(s);
@@ -489,11 +489,38 @@ static void control_choice_mouse(ps_session *s,const ps_mouse_event *e){
 }
 #endif
 #endif
+enum { CONTROL_DIALOG_HEIGHT=9, CONTROL_DIALOG_WIDTH=60, CONTROL_BUTTON_WIDTH=12, CONTROL_BUTTON_GAP=3 };
+typedef struct {unsigned x,y,width,height,shift,buttons,accept,cancel,framed,titlebar;} ControlDialogBox;
+static ControlDialogBox control_dialog_box(ps_session *s){
+    ControlDialogBox b;unsigned flags=ps_get_dialog_style(s);
+    b.titlebar=!!(flags&PS_DIALOG_TITLE_BAR);b.framed=!!(flags&PS_DIALOG_FRAMED_BUTTONS);
+    b.shift=b.titlebar?2:0;b.height=CONTROL_DIALOG_HEIGHT+b.shift+2*b.framed;
+    b.width=min(CONTROL_DIALOG_WIDTH,s->io.columns-6);b.x=(s->io.columns-b.width)/2+1;
+    b.y=s->io.rows>b.height?(s->io.rows-b.height)/2+1:1;
+    b.buttons=b.y+7+b.shift+b.framed;b.accept=b.x+3;
+    b.cancel=b.accept+(b.framed?CONTROL_BUTTON_WIDTH+CONTROL_BUTTON_GAP:12);
+    return b;
+}
+#if PS_DIALOG_STYLES
+static void control_dialog_button(ps_session *s,unsigned x,unsigned y,const char *label,unsigned focused,unsigned role){
+    unsigned row,j,n=min(cells(label,length(label),s->io.flags),CONTROL_BUTTON_WIDTH-2);
+    for(row=0;row<3;++row){at(s,y+row-1,x);surface(s,focused?1:2);ink(s,role);
+        if(row!=1){out(s,ps_border_glyph(PS_BORDER_SINGLE,!!(s->io.flags&PS_UNICODE),row?PS_BORDER_BOTTOM_LEFT:PS_BORDER_TOP_LEFT));
+            for(j=0;j<CONTROL_BUTTON_WIDTH-2;++j)out(s,ps_border_glyph(PS_BORDER_SINGLE,!!(s->io.flags&PS_UNICODE),PS_BORDER_HORIZONTAL));
+            out(s,ps_border_glyph(PS_BORDER_SINGLE,!!(s->io.flags&PS_UNICODE),row?PS_BORDER_BOTTOM_RIGHT:PS_BORDER_TOP_RIGHT));
+        }else{out(s,ps_border_glyph(PS_BORDER_SINGLE,!!(s->io.flags&PS_UNICODE),PS_BORDER_OUTER_VERTICAL));
+            if(focused){if(s->io.flags&PS_COLOR)color(s,"\033[30m");else ansi(s,"\033[1;7m");}
+            spaces(s,(CONTROL_BUTTON_WIDTH-2-n)/2);grid_text(s,label,n);spaces(s,CONTROL_BUTTON_WIDTH-2-n-(CONTROL_BUTTON_WIDTH-2-n)/2);
+            reset(s);surface(s,focused?1:2);ink(s,role);out(s,ps_border_glyph(PS_BORDER_SINGLE,!!(s->io.flags&PS_UNICODE),PS_BORDER_OUTER_VERTICAL));}
+        reset(s);
+    }
+}
+#endif
 static void control_overlay(ps_session *s, const Grid *table) {
     const ps_control *c = control_selected(s);
     unsigned w, x, y, i, start = 0, cursor_x, cursor_y;
     ps_control_value v;
-    char b[80];
+    char b[80];ControlDialogBox box;
     if (!c || !s->editing)
         return;
 #if PS_CONTROL_CHOICE_POPUP
@@ -521,25 +548,25 @@ static void control_overlay(ps_session *s, const Grid *table) {
         ansi(s, "\033[?25h");
         return;
     }
-    w = min(60, s->io.columns - 6);
-    x = (s->io.columns - w) / 2 + 1;
-    y = (s->io.rows - 9) / 2 + 1;
-    for (i = 0; i < 9; ++i) {
+    box=control_dialog_box(s);w=box.width;x=box.x;y=box.y;
+    for (i = 0; i < box.height; ++i) {
         at(s, y + i, x);
         surface(s, 2);
         ink(s, 7);
-        out(s, (s->io.flags & PS_UNICODE) ? (i == 0 ? "╭" : i == 8 ? "╰" : "│") : "+");
-        if (i == 0 || i == 8) {
+        out(s,frame_glyph(s,i==0?PS_BORDER_TOP_LEFT:i+1==box.height?PS_BORDER_BOTTOM_LEFT:i==2&&box.titlebar?PS_BORDER_MIDDLE_LEFT:PS_BORDER_OUTER_VERTICAL));
+        if (i == 0 || i+1 == box.height || (i==2&&box.titlebar)) {
             unsigned j;
             for (j = 0; j < w - 2; ++j)
-                out(s, (s->io.flags & PS_UNICODE) ? "─" : "-");
+                out(s,frame_glyph(s,i==0?PS_BORDER_TOP:i+1==box.height?PS_BORDER_BOTTOM:PS_BORDER_HORIZONTAL));
         } else
             spaces(s, w - 2);
-        out(s, (s->io.flags & PS_UNICODE) ? (i == 0 ? "╮" : i == 8 ? "╯" : "│") : "+");
+        out(s,frame_glyph(s,i==0?PS_BORDER_TOP_RIGHT:i+1==box.height?PS_BORDER_BOTTOM_RIGHT:i==2&&box.titlebar?PS_BORDER_MIDDLE_RIGHT:PS_BORDER_OUTER_VERTICAL));
     }
     at(s, y + 1, x + 3);
     ink(s, 1);
-    grid_text(s, control_label(s,c), w - 6);
+    grid_text(s, control_label(s,c), w - (box.titlebar?10:6));
+    if(box.titlebar){at(s,y+1,x+w-4);surface(s,2);ink(s,PS_INK_ERROR);out(s,(s->io.flags&PS_UNICODE)?"×":"X");}
+    y+=box.shift;
     at(s, y + 2, x + 3);
     ink(s, 0);
     grid_text(s, c->group, w - 6);
@@ -581,7 +608,14 @@ static void control_overlay(ps_session *s, const Grid *table) {
             grid_text(s, c->choices[choice], w - 6);
     } else if (c->kind == PS_CONTROL_TOGGLE)
         out(s, "0 Off   1 On");
-    at(s, y + 7, x + 3);
+#if PS_DIALOG_STYLES
+    if(box.framed){
+        control_dialog_button(s,box.accept,box.buttons,"Apply",s->dialog_focus==1,PS_INK_SUCCESS);
+        control_dialog_button(s,box.cancel,box.buttons,"Cancel",s->dialog_focus==2,PS_INK_TEXT);
+    }else
+#endif
+    {
+    at(s,box.buttons,box.accept);
     if (s->dialog_focus == 1)
         surface(s, 1);
     ink(s, 5);
@@ -592,6 +626,7 @@ static void control_overlay(ps_session *s, const Grid *table) {
         surface(s, 1);
     ink(s, 4);
     out(s, s->dialog_focus == 2 ? "[ Cancel ]" : "  Cancel  ");
+    }
     reset(s);
     if (!s->dialog_focus && c->kind != PS_CONTROL_ACTION) {
         at(s, cursor_y, cursor_x);

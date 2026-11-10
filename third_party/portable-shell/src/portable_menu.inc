@@ -2,12 +2,13 @@
 static void view_color(ps_session *s,const char *code){if(s->io.flags&PS_COLOR)ansi(s,code);}
 static void view_selection(ps_session *s){if(s->io.flags&PS_COLOR)view_color(s,"\033[30;43m");else ansi(s,"\033[7m");}
 static void view_rule_color(ps_session *s,unsigned y,unsigned x,unsigned w,int bottom,const char *code){
-    unsigned i;at(s,y,x);view_color(s,code);out(s,(s->io.flags&PS_UNICODE)?(bottom?"╰":"╭"):"+");
-    for(i=0;i<w-2;++i)out(s,(s->io.flags&PS_UNICODE)?"─":"-");
-    out(s,(s->io.flags&PS_UNICODE)?(bottom?"╯":"╮"):"+");reset(s);
+    unsigned i;at(s,y,x);view_color(s,code);out(s,frame_glyph(s,bottom?PS_BORDER_BOTTOM_LEFT:PS_BORDER_TOP_LEFT));
+    for(i=0;i<w-2;++i)out(s,frame_glyph(s,bottom?PS_BORDER_BOTTOM:PS_BORDER_TOP));
+    out(s,frame_glyph(s,bottom?PS_BORDER_BOTTOM_RIGHT:PS_BORDER_TOP_RIGHT));reset(s);
 }
 static void view_rule(ps_session *s,unsigned y,unsigned x,unsigned w,int bottom){view_rule_color(s,y,x,w,bottom,"\033[31m");}
-static void view_side(ps_session *s){view_color(s,"\033[31m");out(s,(s->io.flags&PS_UNICODE)?"│":"|");reset(s);}
+static void view_side(ps_session *s){view_color(s,"\033[31m");out(s,frame_glyph(s,PS_BORDER_OUTER_VERTICAL));reset(s);}
+static void view_inner_side(ps_session *s){view_color(s,"\033[31m");out(s,frame_glyph(s,PS_BORDER_INNER_VERTICAL));reset(s);}
 static void menu_item_style(ps_session *s,const ps_menu_item *item,int selected){
     unsigned unavailable=(item->flags&PS_MENU_DISABLED)||(!item->run&&!item->submenu);
     if(selected&&!(s->menu_style&PS_MENU_MARKER))view_selection(s);
@@ -51,18 +52,18 @@ static void menu_draw(ps_session *s){
     canvas_begin(s,1,w+slots*256+pane*65536);at(s,1,x);menu_heading(s,s->io.columns-x);
     at(s,2,x);menu_notice(s,s->io.columns-x);
     view_rule(s,3,x,w,0);
-    if(num){at(s,3,x+6);view_color(s,"\033[31m");out(s,(s->io.flags&PS_UNICODE)?"┬":"+");reset(s);}
+    if(num){at(s,3,x+6);view_color(s,"\033[31m");out(s,frame_glyph(s,PS_BORDER_TOP_JOIN));reset(s);}
     for(i=0;i<slots;++i){
         unsigned idx=s->menu_top+i;const ps_menu_item *item=m->items+idx;char number[8];unsigned n;
         at(s,4+i,x);view_side(s);
         menu_item_style(s,item,idx==s->menu_selected);
         out(s," ");
-        if(num){n=dec(number,idx+1);number[n]=0;field(s,number,3);out(s," ");view_side(s);menu_item_style(s,item,idx==s->menu_selected);}
+        if(num){n=dec(number,idx+1);number[n]=0;field(s,number,3);out(s," ");view_inner_side(s);menu_item_style(s,item,idx==s->menu_selected);}
         if(marker){out(s,idx==s->menu_selected?((s->io.flags&PS_UNICODE)?"▸ ":"> "):"  ");}
         field(s,item->label,w-num-6-marker);out(s,item->submenu?((s->io.flags&PS_UNICODE)?" › ":" > "):"   ");reset(s);view_side(s);
     }
     view_rule(s,4+slots,x,w,1);
-    if(num){at(s,4+slots,x+6);view_color(s,"\033[31m");out(s,(s->io.flags&PS_UNICODE)?"┴":"+");reset(s);}
+    if(num){at(s,4+slots,x+6);view_color(s,"\033[31m");out(s,frame_glyph(s,PS_BORDER_BOTTOM_JOIN));reset(s);}
     if(pane){
         const char *d=0;unsigned px=x+w+3,pw=s->io.columns-px-1;
         at(s,3,px);view_color(s,"\033[1;33m");field(s,m->count?m->items[s->menu_selected].label:"Empty menu",pw);reset(s);

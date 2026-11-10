@@ -3,6 +3,7 @@
 #define PORTABLE_DEVICE_VIEW_HPP
 #include "portable_shell_editor.hpp"
 #include "portable_style.h"
+#include "portable_border.h"
 #include "portable_meter.h"
 /* MIT Copyright (c) 2026 AtomicDeploy contributors. Canonical snapshot/action
  * device view. Source lineage is in the donor inventory. Hardware calls and routing
@@ -198,6 +199,20 @@ class DeviceView {
         }
     }
     void setTheme(Theme theme) { if (theme <= Default && theme_ != theme) {theme_=theme;dirty_=full_=true;} }
+    bool setBorderStyle(unsigned style){
+        if(!ps_border_style_valid(style))return false;
+#if PS_BORDER_STYLES
+        if(borderStyle_!=style){borderStyle_=style;dirty_=full_=true;}
+#endif
+        return true;
+    }
+    unsigned borderStyle() const {
+#if PS_BORDER_STYLES
+        return borderStyle_;
+#else
+        return PS_BORDER_ROUNDED;
+#endif
+    }
     Theme theme() const { return theme_; }
     void setTabLayout(TabLayout layout) {
         if (layout <= VerticalTabs && tabs_ != layout) { tabs_=layout;dirty_=full_=true; }
@@ -1036,6 +1051,9 @@ class DeviceView {
     unsigned sectionIndicators_=0,paintedGutter_=0;
     bool footerGrid_=PS_FOOTER_GRID!=0,footerEmphasis_=false;
     bool syncOutput_=PS_SYNC_OUTPUT!=0;
+#if PS_BORDER_STYLES
+    unsigned borderStyle_=ps_border_style_valid(PS_BORDER_DEFAULT)?PS_BORDER_DEFAULT:PS_BORDER_ROUNDED;
+#endif
     unsigned editRow_ = 6, editColumn_ = 30, editWidth_ = 40;
     uint32_t observed_ = 0;
     uint32_t painted_[PS_DEVICE_VIEW_RETAIN_ROWS ? PS_DEVICE_VIEW_MAX_ROWS : 1]{};

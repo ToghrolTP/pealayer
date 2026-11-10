@@ -11,6 +11,17 @@ pub struct Status {
     pub controller: bool,
 }
 impl Status {
+    /// Explicit reports may follow an ACK before the general UI snapshot has
+    /// been republished. Reconcile factual decoder properties for that report.
+    pub fn with_observation(mut self, observed: &Observed) -> Self {
+        if let Some(idle) = observed.idle { self.loaded = !idle; }
+        if let Some(paused) = observed.paused { self.playing = !paused; }
+        self.playing &= self.loaded;
+        if let Some(position) = observed.position { self.position = position; }
+        if let Some(volume) = observed.volume { self.volume = volume; }
+        if let Some(muted) = observed.muted { self.muted = muted; }
+        self
+    }
     pub fn state(&self) -> &'static str {
         if !self.loaded {
             "■ Idle"
@@ -136,6 +147,16 @@ impl Pending {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn immediate_report_uses_decoder_state_not_the_previous_ui_snapshot() {
+        let previous = Status { loaded:true, playing:true, position:10.0, ..Default::default() };
+        let report=previous.with_observation(&Observed {idle:Some(false),paused:Some(true),position:Some(5.25),..Default::default()});
+        assert!(!report.playing);
+        assert!(report.loaded);
+        assert_eq!(report.position,5.25);
+        assert!(report.summary().contains("Ⅱ Paused"));
+        assert!(!report.with_observation(&Observed {idle:Some(true),paused:Some(false),..Default::default()}).playing);
+    }
     #[test]
     fn dispatched_or_optimistic_state_is_not_confirmation() {
         let pending = Pending::new(Action::Play);

@@ -27,13 +27,13 @@ static void dashboard_render(ps_session *s){
         view_rule_color(s,b.y,b.x,b.w,0,ps_style_ink(s->theme,(s->io.flags&PS_TRUECOLOR)!=0,0,role));
         at(s,b.y,b.x+2);ink(s,role);out(s," ");field(s,p->title,min(b.w-8,cells(p->title,length(p->title),s->io.flags)));out(s," ");reset(s);
         for(j=0;j<slots;++j){
-            at(s,b.y+1+j,b.x);ink(s,role);out(s,(s->io.flags&PS_UNICODE)?"│":"|");out(s," ");
+            at(s,b.y+1+j,b.x);ink(s,role);out(s,frame_glyph(s,PS_BORDER_OUTER_VERTICAL));out(s," ");
             if(j+top<p->count){
                 if(i==tab&&j+top==selected)surface(s,2);
                 control_row(s,j+top,&g);reset(s);
                 if(i==tab&&j+top==selected){edity=b.y+1+j;editx=b.x+g.widths[0]+5;editwidth=g.widths[1];}
             }else spaces(s,b.w-4);
-            out(s," ");ink(s,role);out(s,(s->io.flags&PS_UNICODE)?"│":"|");reset(s);
+            out(s," ");ink(s,role);out(s,frame_glyph(s,PS_BORDER_OUTER_VERTICAL));reset(s);
         }
         view_rule_color(s,b.y+b.h-1,b.x,b.w,1,ps_style_ink(s->theme,(s->io.flags&PS_TRUECOLOR)!=0,0,role));
         if(p->count>slots){at(s,b.y+b.h-1,b.x+b.w-13);ink(s,PS_INK_MUTED);
