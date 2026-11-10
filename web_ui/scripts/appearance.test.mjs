@@ -23,7 +23,8 @@ test('the original 18-point density remains available without reinterpreting sav
 test('native workspace and font previews share one appearance contract', () => {
   const preview = { ui_font_family: 'custom', ui_font_name: 'Segoe UI',
     monospace_font_family: 'custom', monospace_font_name: 'Cascadia Mono',
-    workspace_ui: 'egui_dock', preferences_grouped_navigation: false };
+    workspace_ui: 'egui_dock', native_monitor_style: 'compact', native_timeline_style: 'standard',
+    preferences_grouped_navigation: false };
   const next = mergeAppearance({ volume: 42 }, preview);
   for (const [key, value] of Object.entries(preview)) assert.equal(next[key], value);
   assert.equal(next.volume, 42);
@@ -39,6 +40,24 @@ test('Neutral is the default; Studio remains an explicit palette', () => {
   assert.equal(paletteName(null), 'native');
   assert.equal(paletteName({}), 'native');
   assert.equal(paletteName({ color_palette: 'studio' }), 'studio');
+});
+
+test('native panel styles preview independently without replacing saved workspace or controls', () => {
+  const original = { volume: 37, ui: { sidebar_rail: { width: 380, open: 'hardware_monitor' } },
+    workspace_session: { name: 'Editing', dialogs: { audio: true } },
+    control_bars: { monitor: { order: ['mute', 'play_pause', 'fullscreen'], hidden: [false, true] } } };
+  const before = structuredClone(original);
+  for (const workspace_ui of ['egui_dock', 'craft_ui']) {
+    for (const native_monitor_style of ['compact', 'film_craft']) {
+      for (const native_timeline_style of ['standard', 'film_craft']) {
+        const appearance = { workspace_ui, native_monitor_style, native_timeline_style };
+        const next = mergeAppearance(original, appearance);
+        for (const [key, value] of Object.entries(appearance)) assert.equal(next[key], value);
+        for (const key of ['ui', 'workspace_session', 'control_bars', 'volume']) assert.deepEqual(next[key], original[key]);
+        assert.deepEqual(original, before);
+      }
+    }
+  }
 });
 
 test('native preview updates shared config without losing unrelated settings or leaking resolution fields', () => {

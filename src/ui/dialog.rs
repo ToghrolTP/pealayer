@@ -31,7 +31,7 @@ pub fn stable_toggle(ui: &mut egui::Ui, selected: &mut bool, label: &str) -> egu
         ui.painter().rect(rect, visuals.corner_radius, visuals.weak_bg_fill, visuals.bg_stroke, egui::StrokeKind::Inside);
     }
     ui.painter().galley(rect.center() - galley.size() * 0.5, galley, visuals.fg_stroke.color);
-    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, response.enabled(), *selected, label));
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, response.enabled(), *selected, label));
     response
 }
 
@@ -51,7 +51,7 @@ pub fn close_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
         egui::Rect::from_min_size(egui::Pos2::ZERO, galley.size())
     };
     ui.painter().galley(rect.center() - ink.center().to_vec2(), galley, visuals.fg_stroke.color);
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, response.enabled(), label));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, response.enabled(), label));
     response.on_hover_text(label)
 }
 
