@@ -1384,7 +1384,7 @@ fn panel_contents(
                         || state.preferences.allow_system_shell),
                 state.preferences.font_size,
                 &state.preferences,
-                view.target == TerminalTarget::PortableShell && view.phase == "ready",
+                view.target == TerminalTarget::PortableShell && view.session.is_some(),
             )
         })
         .inner;
@@ -1395,13 +1395,15 @@ fn panel_contents(
     if output.preferences {
         *open_preferences = true;
     }
-    if size != view.size {
-        view.size = size;
-        if !line_mode && view.phase == "ready" {
-            view.send(super::terminal_backend::Input::Resize {
-                rows: size.0,
-                cols: size.1,
-            });
+    if size != view.size && view.phase != "opening" {
+        // Keep the launch size until the first resize can actually reach the
+        // backend. Recording the new size during startup suppresses that
+        // resize and leaves the producer wider than the visible grid.
+        if line_mode || view.phase != "ready" || view.send(super::terminal_backend::Input::Resize {
+            rows: size.0,
+            cols: size.1,
+        }) {
+            view.size = size;
         }
     }
     if !line_mode {
