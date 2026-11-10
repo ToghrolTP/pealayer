@@ -2,6 +2,7 @@ pub mod about;
 pub mod audio;
 pub mod board_info;
 pub mod controls;
+pub(crate) mod mouse_buttons;
 pub mod control_density;
 mod monitor_controls;
 pub mod color_picker;

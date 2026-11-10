@@ -86,6 +86,7 @@ fn aspect_matched_inner_size(
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct VideoSurfaceGesture {
+    source: u64,
     pub(crate) button: egui::PointerButton,
     pub(crate) action: crate::config::PlayerDragAction,
     pub(crate) start_time: f64,
@@ -132,22 +133,74 @@ fn gesture_action_for_button(
     }
 }
 
+#[derive(Clone,Copy)]
+struct VideoPress {
+    source: u64,
+    started_at:std::time::Instant,
+    button:egui::PointerButton, origin:egui::Pos2, moved:bool,
+    click:crate::config::PlayerClickAction, drag:crate::config::PlayerDragAction,
+    force_menu:bool, modifier_drag:bool,
+}
+
+fn media_identity(app:&PealayerApp)->u64 {
+    use std::hash::{Hash,Hasher};
+    let mut hash=std::collections::hash_map::DefaultHasher::new();
+    app.current_video_path.hash(&mut hash);hash.finish()
+}
+
+fn video_pointer_policy(app:&PealayerApp,button:egui::PointerButton,modifiers:egui::Modifiers)
+    ->(crate::config::PlayerClickAction,crate::config::PlayerDragAction,bool,bool) {
+    use crate::config::{PlayerClickAction as Click,PlayerDragAction as Drag};
+    if button==egui::PointerButton::Secondary && modifiers.shift && app.mouse_bindings.shift_right_context_menu {
+        return (Click::ContextMenu,Drag::None,true,false);
+    }
+    if button==egui::PointerButton::Primary && (modifiers.ctrl||modifiers.command) {
+        return (Click::None,app.mouse_bindings.ctrl_left_drag,false,true);
+    }
+    if button==egui::PointerButton::Middle && modifiers.alt {
+        return (Click::None,app.mouse_bindings.alt_middle_drag,false,true);
+    }
+    let click=match button {
+        egui::PointerButton::Primary if app.click_player_to_toggle=>Click::PlayPause,
+        egui::PointerButton::Middle=>app.middle_click_action,
+        egui::PointerButton::Secondary=>app.right_click_action,
+        _=>Click::None,
+    };
+    (click,gesture_action_for_button(app,button),false,false)
+}
+
+pub(crate) fn perform_pointer_action(app:&mut PealayerApp,ctx:&egui::Context,action:crate::pointer_bindings::Action) {
+    use crate::{pointer_bindings::Action as A,platform::interop::InteropCommand as C};
+    let command=match action {
+        A::SeekBackward=>C::Seek{seconds:-app.quick_seek_seconds},A::SeekForward=>C::Seek{seconds:app.quick_seek_seconds},
+        A::PreviousChapter=>C::PreviousChapter,A::NextChapter=>C::NextChapter,
+        A::PreviousFile=>C::Previous,A::NextFile=>C::Next,
+        A::FrameBackward=>C::FrameStep{frames:-(app.frame_step_count as i32)},A::FrameForward=>C::FrameStep{frames:app.frame_step_count as i32},
+        A::PlayPause=>C::TogglePause,A::ToggleMute=>C::ToggleMute,A::ToggleFullscreen=>C::ToggleFullscreen,
+        A::BossKey=>{perform_video_surface_click(app,ctx,crate::config::PlayerClickAction::BossKey);return;},
+        _=>return,
+    };
+    if app.current_video_path.is_some(){app.apply_interop_command(ctx,command,"Mouse binding");}
+}
+
 fn begin_video_surface_gesture(
     app: &mut PealayerApp,
     button: egui::PointerButton,
     action: crate::config::PlayerDragAction,
+    started_at:std::time::Instant,
 ) {
     if app.video_surface_gesture.is_some() {
         return;
     }
     let gesture = VideoSurfaceGesture {
+        source:media_identity(app),
         button,
         action,
         start_time: app.playback_time,
         start_rate: app.playback_rate,
         was_paused: app.is_paused,
         target_time: app.playback_time,
-        started_at: std::time::Instant::now(),
+        started_at,
         dragged: false,
     };
     app.video_surface_gesture = Some(gesture);
@@ -172,6 +225,13 @@ fn finish_video_surface_gesture(app: &mut PealayerApp) -> bool {
     let Some(gesture) = app.video_surface_gesture.take() else {
         return false;
     };
+    if gesture.source!=media_identity(app) {
+        if gesture.action==crate::config::PlayerDragAction::TemporaryFastForward {
+            let _=app.mpv.set_property("speed",app.configured_playback_speed);
+            app.playback_rate=app.configured_playback_speed;
+        }
+        return true;
+    }
     match gesture.action {
         crate::config::PlayerDragAction::Seek => app.finish_scrub(gesture.target_time),
         crate::config::PlayerDragAction::TemporaryFastForward => {
@@ -199,6 +259,13 @@ fn finish_video_surface_gesture(app: &mut PealayerApp) -> bool {
     )
 }
 
+/// Release a captured hold even when its panel disappeared before mouse-up.
+pub(crate) fn finish_released_gesture(app:&mut PealayerApp,ctx:&egui::Context) {
+    if app.video_surface_gesture.is_some_and(|g|g.source!=media_identity(app)||!ctx.input(|i|i.focused && i.pointer.button_down(g.button))) {
+        finish_video_surface_gesture(app);
+    }
+}
+
 fn perform_video_surface_click(
     app: &mut PealayerApp,
     ctx: &egui::Context,
@@ -219,6 +286,10 @@ fn perform_video_surface_click(
             if app.current_video_path.is_some() {
                 app.toggle_fullscreen(ctx);
             }
+        }
+        crate::config::PlayerClickAction::BossKey => {
+            app.apply_interop_command(ctx,crate::platform::interop::InteropCommand::Pause,"Mouse boss key");
+            app.apply_interop_command(ctx,crate::platform::interop::InteropCommand::Minimize,"Mouse boss key");
         }
         crate::config::PlayerClickAction::ContextMenu | crate::config::PlayerClickAction::None => {}
     }
@@ -315,26 +386,49 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         egui::PointerButton::Secondary,
     ];
 
-    if response.hovered() && app.current_video_path.is_some() {
-        // Temporary fast-forward is a hold gesture, so it starts on mouse-down
-        // without requiring movement. Every supported pointer button follows
-        // the same rule and one button owns the gesture until release.
+    let source=media_identity(app);
+    if let Some(action)=super::mouse_buttons::take_action_for(ui,gesture_rect,app.mouse_bindings.video,response.id.with(source)) {
+        perform_pointer_action(app,ui.ctx(),action);
+    }
+    let press_id=response.id.with("pointer-press-policy");
+    let mut press=ui.ctx().data_mut(|d|d.get_temp::<VideoPress>(press_id));
+    if press.is_some_and(|p|p.source!=source || !ui.input(|i|i.pointer.button_down(p.button)||i.pointer.button_released(p.button))) {press=None;}
+    let events=ui.input(|i|i.events.clone());
+    for event in events {match event {
+        egui::Event::PointerButton{pos,button,pressed:true,modifiers}
+            if GESTURE_BUTTONS.contains(&button) && response.contains_pointer() && gesture_rect.contains(pos) && (press.is_none()||press.is_some_and(|p|p.button==button))=>{
+                let (click,drag,force_menu,modifier_drag)=video_pointer_policy(app,button,modifiers);
+                press=Some(VideoPress{source,started_at:std::time::Instant::now(),button,origin:pos,moved:false,click,drag,force_menu,modifier_drag});
+            }
+        egui::Event::PointerMoved(pos)=>{if let Some(p)=&mut press {p.moved|=p.origin.distance(pos)>=6.0;}},
+        egui::Event::WindowFocused(false)=>{press=None;},
+        egui::Event::Key{key:egui::Key::Escape,pressed:true,..}=>{press=None;if app.video_surface_gesture.is_some(){finish_video_surface_gesture(app);}},
+        _=>{}
+    }}
+    let press_action=|button|press.filter(|p|p.button==button).map(|p|p.drag).unwrap_or(crate::config::PlayerDragAction::None);
+
+    if app.current_video_path.is_some() && app.video_surface_gesture.is_none() {
+        // A hold activates after 180 ms (or deliberate movement), so an ordinary
+        // click never briefly alters playback speed before opening its menu.
         for button in GESTURE_BUTTONS {
-            let pressed = ui.input(|input| input.pointer.button_pressed(button));
-            let action = gesture_action_for_button(app, button);
-            if pressed && action == crate::config::PlayerDragAction::TemporaryFastForward {
-                begin_video_surface_gesture(app, button, action);
-                break;
+            let action = press_action(button);
+            if let Some(p)=press.filter(|p|p.button==button && ui.input(|i|i.pointer.button_down(button)))
+                && action == crate::config::PlayerDragAction::TemporaryFastForward {
+                let threshold=std::time::Duration::from_millis(180);
+                if p.moved || p.started_at.elapsed()>=threshold {
+                    begin_video_surface_gesture(app, button, action,p.started_at);
+                } else {ui.ctx().request_repaint_after(threshold.saturating_sub(p.started_at.elapsed()));}
             }
         }
     }
 
-    if app.video_surface_gesture.is_none() && app.current_video_path.is_some() {
+    if app.video_surface_gesture.is_none() {
         for button in GESTURE_BUTTONS {
-            if response.drag_started_by(button) {
-                let action = gesture_action_for_button(app, button);
-                if action != crate::config::PlayerDragAction::None {
-                    begin_video_surface_gesture(app, button, action);
+            if press.is_some_and(|p|p.button==button && p.moved && ui.input(|i|i.pointer.button_down(button))) {
+                let action = press_action(button);
+                let horizontal=press.is_some_and(|p|ui.input(|i|i.pointer.latest_pos().is_some_and(|pos|(pos.x-p.origin.x).abs()>=6.0)));
+                if action != crate::config::PlayerDragAction::None && (action!=crate::config::PlayerDragAction::Seek||horizontal&&app.is_seekable&&app.duration.is_finite()&&app.duration>0.0) && (app.current_video_path.is_some() || action==crate::config::PlayerDragAction::MoveWindow) {
+                    begin_video_surface_gesture(app, button, action,press.unwrap().started_at);
                     if action == crate::config::PlayerDragAction::Seek {
                         app.scrub_to(app.playback_time);
                     }
@@ -344,9 +438,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         }
     }
 
-    if app.current_video_path.is_some()
-        && let Some(mut gesture) = app.video_surface_gesture
-        && response.dragged_by(gesture.button)
+    if let Some(mut gesture) = app.video_surface_gesture
+        && press.is_some_and(|p|p.button==gesture.button && p.moved)
     {
         gesture.dragged = true;
         app.video_surface_gesture = Some(gesture);
@@ -358,7 +451,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             crate::config::PlayerDragAction::Seek => {
                 let target = seek_target_from_drag(
                     gesture.start_time,
-                    response.drag_delta().x,
+                    press.map_or(0.0,|p|ui.input(|i|i.pointer.latest_pos().map_or(0.0,|pos|pos.x-p.origin.x))),
                     app.duration,
                 );
                 if (target - gesture.target_time).abs() >= 0.001 {
@@ -371,7 +464,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 let speed = temporary_fast_forward_rate(
                     gesture.start_rate,
                     app.temporary_fast_forward_speed,
-                    response.drag_delta().x,
+                    press.map_or(0.0,|p|ui.input(|i|i.pointer.latest_pos().map_or(0.0,|pos|pos.x-p.origin.x))),
                 );
                 let _ = app.mpv.set_property("speed", speed);
                 app.playback_rate = speed;
@@ -393,28 +486,26 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         })
     };
 
-    if response.double_clicked_by(egui::PointerButton::Primary) && app.current_video_path.is_some()
-    {
-        app.toggle_fullscreen(ui.ctx());
-    } else if !suppress_click && response.clicked_by(egui::PointerButton::Primary) {
-        if app.current_video_path.is_some() && app.click_player_to_toggle {
-            app.toggle_playback();
-        } else if app.current_video_path.is_none() {
-            app.open_media_file_dialog(ui.ctx());
+    let released=press.filter(|p|ui.input(|i|i.pointer.button_released(p.button)));
+    let mut pointer_menu=false;
+    if let Some(p)=released {
+        let inside=ui.rect_contains_pointer(gesture_rect);
+        let primary_id=response.id.with("previous-primary-click-eligible");
+        let previous_primary=ui.ctx().data(|d|d.get_temp::<bool>(primary_id)).unwrap_or(false);
+        if p.force_menu && inside {pointer_menu=true;}
+        else if !suppress_click && !p.moved && response.clicked_by(p.button) {
+            if p.button==egui::PointerButton::Primary && !p.modifier_drag && previous_primary && response.double_clicked_by(p.button) && app.current_video_path.is_some() {
+                app.toggle_fullscreen(ui.ctx());
+            } else if p.button==egui::PointerButton::Primary && !p.modifier_drag && app.current_video_path.is_none() {
+                app.open_media_file_dialog(ui.ctx());
+            } else if p.click==crate::config::PlayerClickAction::ContextMenu {pointer_menu=true;}
+            else {perform_video_surface_click(app,ui.ctx(),p.click);}
         }
+        if p.button==egui::PointerButton::Primary {ui.ctx().data_mut(|d|d.insert_temp(primary_id,!suppress_click&&!p.moved&&!p.modifier_drag));}
+        press=None;
     }
-
-    if !suppress_click && response.clicked_by(egui::PointerButton::Middle) {
-        let action = app.middle_click_action;
-        perform_video_surface_click(app, ui.ctx(), action);
-    }
-    if !suppress_click
-        && response.clicked_by(egui::PointerButton::Secondary)
-        && app.right_click_action != crate::config::PlayerClickAction::ContextMenu
-    {
-        let action = app.right_click_action;
-        perform_video_surface_click(app, ui.ctx(), action);
-    }
+    if press.is_some_and(|p|!ui.input(|i|i.pointer.button_down(p.button))){press=None;}
+    ui.ctx().data_mut(|d|{if let Some(p)=press {d.insert_temp(press_id,p);}else{d.remove::<VideoPress>(press_id);}});
 
     if response.hovered() {
         let scroll = ui.input(|i| {
@@ -453,13 +544,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         app.middle_click_action == crate::config::PlayerClickAction::ContextMenu;
     let right_context_menu =
         app.right_click_action == crate::config::PlayerClickAction::ContextMenu;
-    if middle_context_menu || right_context_menu {
-        let should_open = !suppress_click
-            && ((middle_context_menu && response.clicked_by(egui::PointerButton::Middle))
-                || (right_context_menu && response.clicked_by(egui::PointerButton::Secondary)));
+    if middle_context_menu || right_context_menu || app.mouse_bindings.shift_right_context_menu {
+        let should_open = pointer_menu;
         let open_command = if should_open {
             Some(egui::SetOpenCommand::Bool(true))
-        } else if response.clicked() {
+        } else if released.is_some() {
             Some(egui::SetOpenCommand::Bool(false))
         } else {
             None
@@ -1160,6 +1249,103 @@ fn external_mpv_notice(status: &crate::mpv::external::Status) -> (elegance::Call
 
 #[cfg(test)]
 mod tests {
+    fn pointer_frame(app:&mut PealayerApp,ctx:&egui::Context,time:&mut f64,events:Vec<egui::Event>)->egui::FullOutput {
+        *time+=0.05;
+        let mut output=ctx.run_ui(egui::RawInput{time:Some(*time),events,
+            screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(800.0,600.0))),..Default::default()},|ui|draw(app,ui));
+        output.textures_delta.clear();output
+    }
+    fn mouse(pos:egui::Pos2,button:egui::PointerButton,pressed:bool,modifiers:egui::Modifiers)->egui::Event {
+        egui::Event::PointerButton{pos,button,pressed,modifiers}
+    }
+    fn menu_text(output:&egui::FullOutput)->String {
+        output.shapes.iter().filter_map(|shape|match &shape.shape {egui::Shape::Text(t)=>Some(t.galley.text()),_=>None}).collect::<Vec<_>>().join("\n")
+    }
+    fn mouse_fixture()->PealayerApp {
+        let mut app=PealayerApp::default();app.current_video_path=Some("pointer-fixture.mp4".into());
+        app.consistent_video_aspect_ratio=false;app.video_click_frame_only=true;app.is_paused=true;
+        app.language=crate::config::AppLanguage::English;app
+    }
+    #[test]
+    fn native_pointer_click_drag_and_shift_menu_are_disjoint_and_press_pinned() {
+        let _guard=crate::app::tests::lock_app_tests();
+        let ctx=egui::Context::default();ctx.all_styles_mut(|s|s.animation_time=0.0);
+        let mut app=mouse_fixture();let mut time=0.0;
+        let center=egui::pos2(400.0,300.0);let moved=center+egui::vec2(50.0,12.0);
+        pointer_frame(&mut app,&ctx,&mut time,vec![]);pointer_frame(&mut app,&ctx,&mut time,vec![]);
+        // Ctrl-left is a mode override even without movement: never Play/Pause.
+        pointer_frame(&mut app,&ctx,&mut time,vec![egui::Event::PointerMoved(center),mouse(center,egui::PointerButton::Primary,true,egui::Modifiers::CTRL)]);
+        pointer_frame(&mut app,&ctx,&mut time,vec![mouse(center,egui::PointerButton::Primary,false,egui::Modifiers::NONE)]);
+        assert!(app.is_paused);
+        // Alt-middle does not leak the default fullscreen click on release.
+        pointer_frame(&mut app,&ctx,&mut time,vec![mouse(center,egui::PointerButton::Middle,true,egui::Modifiers::ALT)]);
+        let output=pointer_frame(&mut app,&ctx,&mut time,vec![mouse(center,egui::PointerButton::Middle,false,egui::Modifiers::NONE)]);
+        assert!(!output.viewport_output.values().flat_map(|v|&v.commands).any(|c|matches!(c,egui::ViewportCommand::Fullscreen(_))));
+        // Changing Preferences during a held button cannot change its release action.
+        app.middle_click_action=crate::config::PlayerClickAction::ToggleMute;
+        pointer_frame(&mut app,&ctx,&mut time,vec![mouse(center,egui::PointerButton::Middle,true,egui::Modifiers::NONE)]);
+        app.middle_click_action=crate::config::PlayerClickAction::None;
+        pointer_frame(&mut app,&ctx,&mut time,vec![mouse(center,egui::PointerButton::Middle,false,egui::Modifiers::NONE)]);
+        assert!(app.is_muted);
+        // Right drag suppresses a click even if its drag action is disabled.
+        app.right_hold_action=crate::config::PlayerDragAction::None;
+        pointer_frame(&mut app,&ctx,&mut time,vec![mouse(center,egui::PointerButton::Secondary,true,egui::Modifiers::NONE)]);
+        pointer_frame(&mut app,&ctx,&mut time,vec![egui::Event::PointerMoved(moved)]);
+        let output=pointer_frame(&mut app,&ctx,&mut time,vec![mouse(moved,egui::PointerButton::Secondary,false,egui::Modifiers::NONE)]);
+        assert!(!menu_text(&output).contains("Open Recent"));
+        // Shift-right overrides mute/hold actions and retains its menu intent
+        // after movement and releasing Shift before the physical mouse button.
+        app.is_muted=false;app.right_click_action=crate::config::PlayerClickAction::ToggleMute;
+        app.right_hold_action=crate::config::PlayerDragAction::TemporaryFastForward;
+        pointer_frame(&mut app,&ctx,&mut time,vec![egui::Event::PointerMoved(center),mouse(center,egui::PointerButton::Secondary,true,egui::Modifiers::SHIFT)]);
+        pointer_frame(&mut app,&ctx,&mut time,vec![egui::Event::PointerMoved(moved)]);
+        assert!(app.video_surface_gesture.is_none());
+        pointer_frame(&mut app,&ctx,&mut time,vec![mouse(moved,egui::PointerButton::Secondary,false,egui::Modifiers::NONE)]);
+        let output=pointer_frame(&mut app,&ctx,&mut time,vec![]);
+        assert!(menu_text(&output).contains("Open Recent"),"{}",menu_text(&output));assert!(!app.is_muted);
+    }
+
+    #[test]
+    fn default_middle_click_is_fullscreen_and_extra_buttons_are_real_inputs() {
+        let _guard=crate::app::tests::lock_app_tests();let ctx=egui::Context::default();
+        let mut app=mouse_fixture();let mut time=0.0;let pos=egui::pos2(400.0,300.0);
+        pointer_frame(&mut app,&ctx,&mut time,vec![]);pointer_frame(&mut app,&ctx,&mut time,vec![]);
+        pointer_frame(&mut app,&ctx,&mut time,vec![egui::Event::PointerMoved(pos),mouse(pos,egui::PointerButton::Middle,true,egui::Modifiers::NONE)]);
+        let output=pointer_frame(&mut app,&ctx,&mut time,vec![mouse(pos,egui::PointerButton::Middle,false,egui::Modifiers::NONE)]);
+        assert!(output.viewport_output.values().flat_map(|v|&v.commands).any(|c|matches!(c,egui::ViewportCommand::Fullscreen(true))));
+        app.mouse_bindings.video.back=crate::pointer_bindings::Action::ToggleMute;
+        app.mouse_bindings.video.forward=crate::pointer_bindings::Action::ToggleMute;
+        for button in [egui::PointerButton::Extra1,egui::PointerButton::Extra2] {
+            let previous=app.is_muted;
+            pointer_frame(&mut app,&ctx,&mut time,vec![mouse(pos,button,true,egui::Modifiers::NONE)]);
+            pointer_frame(&mut app,&ctx,&mut time,vec![mouse(pos,button,false,egui::Modifiers::NONE)]);
+            assert_ne!(app.is_muted,previous);
+        }
+    }
+    #[test]
+    fn fast_forward_hold_waits_before_activation_and_releases_when_video_is_hidden() {
+        let _guard=crate::app::tests::lock_app_tests();let ctx=egui::Context::default();let mut app=mouse_fixture();let mut time=0.0;
+        app.right_hold_action=crate::config::PlayerDragAction::TemporaryFastForward;
+        let pos=egui::pos2(400.0,300.0);
+        pointer_frame(&mut app,&ctx,&mut time,vec![]);pointer_frame(&mut app,&ctx,&mut time,vec![]);
+        pointer_frame(&mut app,&ctx,&mut time,vec![egui::Event::PointerMoved(pos),mouse(pos,egui::PointerButton::Secondary,true,egui::Modifiers::NONE)]);
+        assert!(app.video_surface_gesture.is_none());assert!(app.is_paused);
+        std::thread::sleep(std::time::Duration::from_millis(190));
+        pointer_frame(&mut app,&ctx,&mut time,vec![]);
+        assert!(app.video_surface_gesture.is_some());assert!(!app.is_paused);
+        let mut output=ctx.run_ui(egui::RawInput{events:vec![mouse(pos,egui::PointerButton::Secondary,false,egui::Modifiers::NONE)],..Default::default()},|ui|finish_released_gesture(&mut app,ui.ctx()));
+        output.textures_delta.clear();assert!(app.video_surface_gesture.is_none());assert!(app.is_paused);
+        assert_eq!(app.playback_rate,1.0);
+    }
+    #[test]
+    fn a_source_change_revokes_the_old_hold_without_pausing_or_seeking_the_new_media() {
+        let _guard=crate::app::tests::lock_app_tests();let ctx=egui::Context::default();let mut app=mouse_fixture();
+        begin_video_surface_gesture(&mut app,egui::PointerButton::Secondary,crate::config::PlayerDragAction::TemporaryFastForward,std::time::Instant::now());
+        app.current_video_path=Some("different-pointer-fixture.mp4".into());app.is_paused=false;
+        finish_released_gesture(&mut app,&ctx);
+        assert!(app.video_surface_gesture.is_none());assert!(!app.is_paused);
+        assert_eq!(app.playback_rate,app.configured_playback_speed);
+    }
     #[test]
     fn picture_only_pointer_actions_ignore_letterbox_and_can_be_expanded() {
         let _guard=crate::app::tests::lock_app_tests();

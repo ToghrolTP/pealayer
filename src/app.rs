@@ -657,6 +657,7 @@ pub struct PealayerApp {
     pub(crate) configured_playback_speed: f64,
     pub(crate) temporary_fast_forward_speed: f64,
     pub(crate) video_surface_gesture: Option<crate::ui::video::VideoSurfaceGesture>,
+    pub(crate) mouse_bindings: crate::pointer_bindings::Bindings,
 
     pub seek_pos: Option<f64>,
     pub(crate) seek_controller: crate::mpv::seek::SeekController,
@@ -1611,6 +1612,7 @@ impl eframe::App for PealayerApp {
                     .as_ref()
                     .map(|p| crate::media::redact_media_target(&p.to_string_lossy())),
                 media_session: self.media_session_metadata(),
+                mouse_bindings: self.mouse_bindings.clone(),
                 media_display_name: self.current_video_path.as_ref().map(|p| crate::media::media_target_label(&p.to_string_lossy())),
                 media_location_display: self.current_video_path.as_ref().map(|p| crate::media::media_location_display(&p.to_string_lossy())),
                 media_session_capabilities: self.media_session_capabilities(),
@@ -1900,6 +1902,7 @@ impl eframe::App for PealayerApp {
             }
         }
         self.frame_rate_tracker.record_frame(std::time::Instant::now());
+        crate::ui::mouse_buttons::install(ui.ctx(),&self.mouse_bindings);
         // A held seat direction captures the pointer until the physical button
         // is released. This remains active even if a repaint moves the cursor
         // outside the original button or the panel is hidden mid-gesture.
@@ -2206,6 +2209,7 @@ impl eframe::App for PealayerApp {
         crate::ui::remote_location::draw(self, ui.ctx());
         self.draw_timeline_close_confirmation(ui.ctx());
         crate::ui::terminal::draw_exit_confirmation(self, ui.ctx());
+        crate::ui::video::finish_released_gesture(self,ui.ctx());
     }
 
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {
@@ -4560,6 +4564,7 @@ impl PealayerApp {
             InteropCommand::SelectRemote { target, play } => { if let Err(error) = crate::remote_location::select(&target, play) { self.set_osd(error); } },
             InteropCommand::SortRemote { by, descending } => crate::remote_location::sort(by, descending),
             InteropCommand::CloseRemoteBrowser => crate::remote_location::close(),
+            InteropCommand::RemoteHistory {direction,parent} => {if let Err(error)=crate::remote_location::navigate_history(direction,parent,ctx){self.set_osd(error);}},
             InteropCommand::SetFullscreen { enabled } => self.set_fullscreen(ctx, enabled),
             InteropCommand::ToggleFullscreen => self.toggle_fullscreen(ctx),
             InteropCommand::Activate => {
@@ -7640,6 +7645,7 @@ impl PealayerApp {
         cfg.paused_drag_action = self.paused_drag_action;
         cfg.playing_drag_action = self.playing_drag_action;
         cfg.middle_click_action = self.middle_click_action;
+        cfg.mouse_bindings = self.mouse_bindings.clone();
         cfg.middle_hold_action = self.middle_hold_action;
         cfg.right_click_action = self.right_click_action;
         cfg.right_hold_action = self.right_hold_action;
@@ -8042,6 +8048,7 @@ impl PealayerApp {
         self.paused_drag_action = config.paused_drag_action;
         self.playing_drag_action = config.playing_drag_action;
         self.middle_click_action = config.middle_click_action;
+        self.mouse_bindings = config.mouse_bindings.clone();
         self.middle_hold_action = config.middle_hold_action;
         self.right_click_action = config.right_click_action;
         self.right_hold_action = config.right_hold_action;
@@ -10187,6 +10194,7 @@ impl Default for PealayerApp {
             configured_playback_speed: 1.0,
             temporary_fast_forward_speed: 2.0,
             video_surface_gesture: None,
+            mouse_bindings: Default::default(),
             seek_pos: None,
             seek_controller: crate::mpv::seek::SeekController::with_cache(
                 crate::mpv::seek::MpvSeekBackend::new(mpv, Arc::clone(&native_seek_client)),
@@ -10382,10 +10390,10 @@ impl Default for PealayerApp {
             osd_timeout_seconds: 3.5,
             paused_drag_action: crate::config::PlayerDragAction::MoveWindow,
             playing_drag_action: crate::config::PlayerDragAction::TemporaryFastForward,
-            middle_click_action: crate::config::PlayerClickAction::None,
+            middle_click_action: crate::config::PlayerClickAction::ToggleFullscreen,
             middle_hold_action: crate::config::PlayerDragAction::None,
             right_click_action: crate::config::PlayerClickAction::ContextMenu,
-            right_hold_action: crate::config::PlayerDragAction::None,
+            right_hold_action: crate::config::PlayerDragAction::Seek,
             fullscreen_video_background: crate::config::VideoBackground::Black,
             motion_control_mode: crate::config::MotionControlMode::Hold,
             held_motion_action: None,

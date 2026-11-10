@@ -10,6 +10,13 @@ statements are not the present product state.
 
 ## Publication and workspace tools checkpoint
 
+[Surface-scoped mouse controls](mouse-bindings.md) add configurable Back/Forward
+actions, video click-versus-drag modifiers, default middle-click fullscreen and
+authority-owned verified folder history across native/Web. The isolated native
+suite and focused Web checks pass; package/runtime/physical-input acceptance is
+still pending. The completion helper requires the new committed, frozen source;
+its no-discard guard must not be bypassed.
+
 [Shared Terminal and Pealayer Shell](terminal-host-experience.md) adds the real
 Preferences catalog, readable labels and choices, prompt-safe structured reports,
 live status and decoder-confirmed command results. Native/Web integration checks

@@ -50,6 +50,7 @@ export interface PlayerState {
   current_video?: string | null;
   media_display_name?: string | null;
   media_location_display?: string | null;
+  mouse_bindings?: import('../mouseBindings').MouseBindings;
   media_session?: { track_id: string | null; title: string | null; artist: string | null; album: string | null; video: boolean };
   media_session_capabilities?: import('../mediaSession').SessionCapabilities;
   quick_seek_seconds?: number;

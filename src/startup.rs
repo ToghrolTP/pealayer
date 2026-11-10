@@ -900,6 +900,7 @@ pub fn run() -> eframe::Result {
                 paused_drag_action: loaded_config.paused_drag_action,
                 playing_drag_action: loaded_config.playing_drag_action,
                 middle_click_action: loaded_config.middle_click_action,
+                mouse_bindings: loaded_config.mouse_bindings.clone(),
                 middle_hold_action: loaded_config.middle_hold_action,
                 right_click_action: loaded_config.right_click_action,
                 right_hold_action: loaded_config.right_hold_action,

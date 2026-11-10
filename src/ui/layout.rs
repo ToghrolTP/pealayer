@@ -19171,6 +19171,13 @@ impl<'a> PealayerTabViewer<'a> {
                                 }
                             }
 
+                            if let Some(action)=super::mouse_buttons::take_action(ui,timeline_viewport,self.app.mouse_bindings.timeline) {
+                                use crate::pointer_bindings::Action as M;
+                                pending_timeline_toolbar_action=match action {
+                                    M::PanLeft=>Some(TimelineToolbarAction::PanLeft),M::PanRight=>Some(TimelineToolbarAction::PanRight),
+                                    M::ZoomOut=>Some(TimelineToolbarAction::ZoomOut),M::ZoomIn=>Some(TimelineToolbarAction::ZoomIn),_=>None,
+                                };
+                            }
                             if let Some(action) = pending_timeline_toolbar_action.take() {
                                 let current_offset = timeline_scroll_state.offset();
                                 let current_zoom = self.app.timeline_zoom;

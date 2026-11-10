@@ -6,6 +6,16 @@ retroactively attributed to an older download.
 
 ## Next milestone · unreleased
 
+### 🖱️ Contextual mouse controls
+
+- Configure Back/Forward buttons separately for video, timelines, effects and
+  remote folders, including Ctrl/Command, Alt and Shift variants.
+- Middle-click video defaults to fullscreen; use configurable modifier drags
+  for seeking or native window movement. A right-click opens the menu, while
+  right-drag seeks; Shift+right always opens the menu.
+- Remote folders gain shared Back/Forward history that advances only when the
+  destination loads successfully. Failed navigation keeps the last good view.
+
 ### 🖥️ Windows taskbar and appearance
 
 - Changing the application icon also updates Explorer's taskbar group artwork

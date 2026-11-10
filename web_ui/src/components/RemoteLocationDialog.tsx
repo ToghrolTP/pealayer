@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { clipboardUrl } from '../clipboardUrls';
+import { useExtraMouse } from '../mouseBindings';
+import type { MouseBindings } from '../mouseBindings';
 import { Alert, Button, Checkbox, Descriptions, Dropdown, Input, Modal, Space, Table, Tag, Tooltip, Typography, message } from 'antd';
-import { ArrowUpOutlined, CopyOutlined, FileOutlined, FolderOpenOutlined, GlobalOutlined, PlayCircleOutlined, ReloadOutlined, SearchOutlined, SnippetsOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, ArrowRightOutlined, ArrowUpOutlined, CopyOutlined, FileOutlined, FolderOpenOutlined, GlobalOutlined, PlayCircleOutlined, ReloadOutlined, SearchOutlined, SnippetsOutlined } from '@ant-design/icons';
 
 export interface RemoteEntry { name: string; url: string; is_dir: boolean; playable: boolean; size_bytes: number | null; modified: string | null }
 export interface RemoteBrowser {
   previous_file?: string | null; next_file?: string | null;
+  history_back_url: string | null; history_forward_url: string | null;
   request_id: number; revision: number; visible: boolean; loading: boolean; target: string; use_proxy: boolean;
   auto_next: boolean; thumbnails: boolean; sort: 'name' | 'date' | 'size'; descending: boolean;
   selected: string | null; error: string | null;
@@ -38,10 +41,17 @@ function Thumbnail({ entry, base, enabled }: { entry: RemoteEntry; base: string;
   return <Tooltip title={error}><span className="remote-file-thumbnail">{source ? <img src={source} alt="" /> : entry.is_dir ? <FolderOpenOutlined /> : <FileOutlined />}</span></Tooltip>;
 }
 
-export function RemoteLocationDialog({ state, connected, base, sendCmd, autoInspect }: {
+export function RemoteLocationDialog({ state, connected, base, sendCmd, autoInspect, mouseBindings }: {
   state?: RemoteBrowser; connected: boolean; base: string; sendCmd: (command: string, payload?: Record<string, unknown>) => void;
   autoInspect: boolean;
+  mouseBindings?: MouseBindings;
 }) {
+  const extraMouse = useExtraMouse(mouseBindings?.remote_browser, action => {
+    if (!connected || !state?.visible || state.loading) return;
+    if (action === 'history_back' && (state.history_back_url || state.listing?.parent_url)) sendCmd('remote_history',{direction:-1});
+    else if (action === 'history_forward' && state.history_forward_url) sendCmd('remote_history',{direction:1});
+    else if (action === 'parent_folder' && state.listing?.parent_url) sendCmd('remote_history',{direction:-1,parent:true});
+  });
   const [target, setTarget] = useState(''); const [filter, setFilter] = useState(''); const [proxy, setProxy] = useState(true);
   const override = useRef<boolean | undefined>(undefined);
   const dirty = useRef(false); const lastSent = useRef('');
@@ -73,11 +83,13 @@ export function RemoteLocationDialog({ state, connected, base, sendCmd, autoInsp
     { key: 'copy', label: 'Copy URL', icon: <CopyOutlined />, onClick: () => copy(entry.url) },
   ] });
   const sortOrder = (by: RemoteBrowser['sort']) => state.sort === by ? state.descending ? 'descend' as const : 'ascend' as const : null;
-  return <Modal title={<Space><FolderOpenOutlined />Remote location</Space>} open centered onCancel={() => sendCmd('pealayer.remote.close')}
+  return <Modal modalRender={node => <div {...extraMouse}>{node}</div>} title={<Space><FolderOpenOutlined />Remote location</Space>} open centered onCancel={() => sendCmd('pealayer.remote.close')}
     width="min(1000px, calc(100vw - 32px))" className="remote-location-modal" styles={{ body: { maxHeight: 'calc(100dvh - 220px)', overflow: 'auto' } }}
     footer={<Space><Button onClick={() => sendCmd('pealayer.remote.close')}>Close</Button><Button type="primary" icon={<PlayCircleOutlined />} disabled={!connected || state.loading || !selected?.playable} onClick={() => selected && choose(selected, true)}>Play selected</Button></Space>}>
     <div className="remote-location-address"><Input aria-label="Remote location" value={target} onChange={e => { dirty.current = true; setTarget(e.target.value); }} onPressEnter={() => valid && browse(target)} placeholder="https://host/folder/" prefix={<GlobalOutlined />} /><Tooltip title="Paste a link; browser clipboard permission may be required"><Button icon={<SnippetsOutlined />} aria-label="Paste remote link" disabled={!navigator.clipboard?.readText} onClick={() => { void navigator.clipboard.readText().then(text => { dirty.current = true; setTarget(text); }).catch(() => { void message.info('Clipboard access was denied. Paste into the address field with Ctrl+V or your browser menu.'); }); }} /></Tooltip><Button icon={<SearchOutlined />} disabled={!connected || !valid} onClick={() => browse(target)}>Browse</Button></div>
     <Space wrap className="remote-location-options">
+      <Button icon={<ArrowLeftOutlined />} aria-label="Back" disabled={!connected || state.loading || !(state.history_back_url || listing?.parent_url)} onClick={() => sendCmd('remote_history',{direction:-1})} />
+      <Button icon={<ArrowRightOutlined />} aria-label="Forward" disabled={!connected || state.loading || !state.history_forward_url} onClick={() => sendCmd('remote_history',{direction:1})} />
       <Tooltip title="A manual choice overrides automatic route selection until this dialog closes"><Checkbox checked={proxy} onChange={e => { override.current = e.target.checked; setProxy(e.target.checked); if (valid) browse(target); }}>Use proxy</Checkbox></Tooltip>
       {listing && <><Tag icon={<GlobalOutlined />}>{listing.host}</Tag>{listing.server && <Typography.Text type="secondary">{listing.server}</Typography.Text>}
         {listing.parent_url && <Button icon={<ArrowUpOutlined />} disabled={!connected || state.loading} onClick={() => browse(listing.parent_url!)}>Parent folder</Button>}

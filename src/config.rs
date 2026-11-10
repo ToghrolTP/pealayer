@@ -510,6 +510,7 @@ pub enum PlayerClickAction {
     PlayPause,
     ToggleMute,
     ToggleFullscreen,
+    BossKey,
     ContextMenu,
     #[default]
     None,
@@ -1210,6 +1211,7 @@ pub struct AppConfig {
     pub paused_drag_action: PlayerDragAction,
     pub playing_drag_action: PlayerDragAction,
     pub middle_click_action: PlayerClickAction,
+    pub mouse_bindings: crate::pointer_bindings::Bindings,
     pub middle_hold_action: PlayerDragAction,
     pub right_click_action: PlayerClickAction,
     pub right_hold_action: PlayerDragAction,
@@ -1420,10 +1422,11 @@ impl Default for AppConfig {
             osd_timeout_seconds: 3.5,
             paused_drag_action: PlayerDragAction::MoveWindow,
             playing_drag_action: PlayerDragAction::TemporaryFastForward,
-            middle_click_action: PlayerClickAction::None,
+            middle_click_action: PlayerClickAction::ToggleFullscreen,
+            mouse_bindings: Default::default(),
             middle_hold_action: PlayerDragAction::None,
             right_click_action: PlayerClickAction::ContextMenu,
-            right_hold_action: PlayerDragAction::None,
+            right_hold_action: PlayerDragAction::Seek,
             fullscreen_video_background: VideoBackground::Black,
             motion_control_mode: MotionControlMode::Hold,
             compact_hardware_controls: false,
@@ -2223,6 +2226,7 @@ impl AppConfig {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        self.mouse_bindings.validate()?;
         if [self.simple_workspace.controls_x,self.simple_workspace.controls_y].iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v)) {
             return Err("Simple control position must be between 0 and 1".into());
         }

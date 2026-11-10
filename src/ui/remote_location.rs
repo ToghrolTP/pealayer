@@ -48,7 +48,23 @@ pub fn draw(app: &mut PealayerApp, ctx: &egui::Context) {
         .default_rect(geometry.default_rect).min_size(geometry.min_size).max_size(geometry.max_size)
         .constrain_to(geometry.bounds).frame(dialog::opaque_window_frame_from_context(ctx))
         .show(ctx, |ui| {
+            if let Some(action)=super::mouse_buttons::take_action(ui,ui.max_rect(),app.mouse_bindings.remote_browser) {
+                use crate::pointer_bindings::Action as M;
+                let command=match action {
+                    M::HistoryBack=>Some(crate::platform::interop::InteropCommand::RemoteHistory{direction:-1,parent:false}),
+                    M::HistoryForward=>Some(crate::platform::interop::InteropCommand::RemoteHistory{direction:1,parent:false}),
+                    M::ParentFolder=>Some(crate::platform::interop::InteropCommand::RemoteHistory{direction:-1,parent:true}),_=>None,
+                };
+                if let Some(command)=command {app.apply_interop_command(ctx,command,"Remote browser mouse");}
+            }
             ui.horizontal(|ui| {
+                for (available,icon,caption,direction) in [
+                    (state.history_back_url.is_some()||state.listing.as_ref().is_some_and(|l|l.parent_url.is_some()),icons::ARROW_LEFT,"Back",-1),
+                    (state.history_forward_url.is_some(),icons::ARROW_RIGHT,"Forward",1)] {
+                    if ui.add_enabled(!state.loading&&available,egui::Button::new(icon)).on_hover_text(caption).clicked() {
+                        app.apply_interop_command(ctx,crate::platform::interop::InteropCommand::RemoteHistory{direction,parent:false},"Remote browser");
+                    }
+                }
                 ui.label(icons::LINK);
                 let response = ui.add(crate::ui::dialog::singleline_text_edit(ui, &mut view.target).hint_text("https://host/folder/").desired_width((ui.available_width() - 88.0).max(90.0)));
                 if response.changed() { view.edited_at = Some(std::time::Instant::now()); }

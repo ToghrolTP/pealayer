@@ -13,6 +13,7 @@ pub mod downloads;
 pub mod four_d;
 pub mod hardware_shortcuts;
 pub mod media;
+pub mod pointer_bindings;
 pub mod media_info;
 pub mod messaging;
 pub mod mpv;

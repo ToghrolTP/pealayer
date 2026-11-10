@@ -80,7 +80,7 @@ const contracts = [
   [sevenSegment.includes("mask & (1 << bit)") && hardware.includes('<SevenSegmentDisplay'), 'front-panel masks render as live seven-segment glyphs'],
   [remote.includes('<MediaSurface') && studio.includes('<MediaSurface'), 'both player surfaces share the native media element'],
   [media.includes('/api/fs/file?path=') && media.includes('<video'), 'browser playback consumes the range-serving endpoint'],
-  [media.includes('onPointerDown') && media.includes('onPointerMove') && media.includes("trigger={['contextMenu']}"), 'video surfaces share configured mouse, pen, touch, and context-menu gestures'],
+  [media.includes('onPointerDown') && media.includes('onPointerMove') && media.includes('videoReleaseIntent(gesture') && media.includes('open={contextMenuOpen}') && media.includes('onContextMenu:'), 'video surfaces share configured, movement-aware pointer/context-menu gestures'],
   [studio.includes('state.timeline_tracks') && studio.includes('timelineRows.map'), 'timeline renders the shared native track inventory'],
   [studio.includes("const mode = copying ? 'move' : cue.resizable && localX <= edge") && studio.includes('{cue.resizable && <span className="timeline-cue__resize timeline-cue__resize--left"') && studio.includes('{cue.resizable && <span className="timeline-cue__resize timeline-cue__resize--right"'), 'Ctrl-copy bypasses resize; normal cue edges follow the Rust execution policy'],
   [studio.includes("kind: 'pinch'") && studio.includes("event.button !== 1") && css.includes('.timeline-grid.is-panning'), 'timeline supports two-finger pinch/pan and middle-button panning'],

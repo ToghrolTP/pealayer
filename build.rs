@@ -23,7 +23,10 @@ fn build_embedded_terminal() {
         .define("PS_DIALOG_STYLES", "1")
         .std("c99")
         .flag_if_supported("-fno-builtin")
-        .compile("pealayer_portable_shell");
+        // This archive includes the Pealayer adapter as well as the byte core.
+        // Do not reuse the core-only archive identity from comparison builds
+        // that share the host's Cargo cache.
+        .compile("pealayer_portable_shell_host");
     // Optional native discovery adapter reads bounded terminal profile files;
     // unlike the shell core this small adapter intentionally uses platform IO.
     cc::Build::new()

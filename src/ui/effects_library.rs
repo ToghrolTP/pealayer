@@ -1746,6 +1746,16 @@ fn draw_sequence_timeline(
                         ui.allocate_exact_size(canvas_size, egui::Sense::click());
                     // Only claim the canvas, not toolbar/fields or popup menus.
                     let surface = viewport.translate(canvas.min.to_vec2()).intersect(ui.clip_rect());
+                    if let Some(action)=super::mouse_buttons::take_action(ui,surface,super::mouse_buttons::bindings(ui.ctx()).effect_designer) {
+                        use crate::pointer_bindings::Action as M;
+                        let wheel=match action {
+                            M::PanLeft=>Some(super::layout::TimelineWheelAction::HorizontalScroll(surface.width()*0.65)),
+                            M::PanRight=>Some(super::layout::TimelineWheelAction::HorizontalScroll(-surface.width()*0.65)),
+                            M::ZoomOut=>Some(super::layout::TimelineWheelAction::Zoom(-120.0)),
+                            M::ZoomIn=>Some(super::layout::TimelineWheelAction::Zoom(120.0)),_=>None,
+                        };
+                        pending_wheel=wheel.map(|action|(action,surface.center().x));
+                    }
                     let add_track_heading = egui::Rect::from_min_size(
                         egui::pos2(canvas.left(), canvas.top() + ruler_height + lanes.len() as f32 * row_height),
                         egui::vec2(label_width, row_height));
@@ -1753,7 +1763,7 @@ fn draw_sequence_timeline(
                         && !ui.ctx().pointer_hover_pos().is_some_and(|pointer| add_track_heading.contains(pointer)) {
                         let modifiers = ui.input(super::layout::timeline_wheel_modifiers);
                         pending_wheel = super::layout::timeline_wheel_over_surface(ui, surface,
-                            wheel_preferences.behavior(modifiers));
+                            wheel_preferences.behavior(modifiers)).or(pending_wheel);
                     }
                     let painter = ui.painter_at(canvas);
                     let timeline_left = canvas.left() + label_width;

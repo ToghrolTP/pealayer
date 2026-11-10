@@ -46,6 +46,7 @@ import { MediaSurface } from './MediaSurface';
 import { ElapsedTimeInput } from './ElapsedTimeInput';
 import type { MediaGesturePreferences } from './MediaSurface';
 import { defaultTimelineWheelPreferences, timelineWheelAction, timelineZoomAtPointer } from '../timelineWheel';
+import { useExtraMouse } from '../mouseBindings';
 import type { TimelineWheelPreferences } from '../timelineWheel';
 import { appendMelodySteps, sequenceDurationMs } from '../melodyCatalog';
 
@@ -114,6 +115,16 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
   }>(null);
   const [timelineZoom, setTimelineZoom] = useState(1);
   const timelineZoomRef = useRef(1);
+  const extraMouse = useExtraMouse(state.mouse_bindings?.timeline, action => {
+    const grid = timelineGridRef.current; if (!grid) return;
+    if (action === 'pan_left' || action === 'pan_right') grid.scrollLeft += (action === 'pan_left' ? -1 : 1) * grid.clientWidth * .65;
+    else if (action === 'zoom_out' || action === 'zoom_in') {
+      const next = timelineZoomAtPointer(timelineZoomRef.current, action === 'zoom_in' ? -120 : 120, grid.scrollLeft, grid.clientWidth / 2);
+      timelineZoomRef.current = next.zoom;
+      const content = grid.firstElementChild as HTMLElement | null; if (content) content.style.width = `${next.zoom * 100}%`;
+      grid.scrollLeft = next.scrollLeft; setTimelineZoom(next.zoom);
+    }
+  });
   useEffect(() => {
     const grid = timelineGridRef.current;
     if (!grid) return;
@@ -909,7 +920,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
           </div>
         </header>
 
-        <div className="timeline-grid" ref={timelineGridRef}>
+        <div className="timeline-grid" ref={timelineGridRef} {...extraMouse}>
         <div className="timeline-content" style={{ width: `${timelineZoom * 100}%` }}>
         <div className="timeline-ruler">
           <div className="timeline-ruler-track">

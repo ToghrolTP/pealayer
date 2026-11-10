@@ -181,6 +181,7 @@ pub enum InteropCommand {
     SelectRemote { target: String, #[serde(default)] play: bool },
     SortRemote { by: crate::remote_location::SortBy, #[serde(default)] descending: bool },
     CloseRemoteBrowser,
+    RemoteHistory {direction:i32, #[serde(default)] parent:bool},
     SetFullscreen {
         enabled: bool,
     },
@@ -888,6 +889,7 @@ impl InteropCommand {
             Self::ShowOsd { options, .. } => options.validate(),
             Self::PublishToast { toast } => toast.validate(),
             Self::InvokeToastAction { id, action_id, .. } if !crate::messaging::valid_id(id) || !crate::messaging::valid_id(action_id) => Err("invalid notification action identity".into()),
+            Self::RemoteHistory {direction,parent} if !matches!(direction,-1|1) || *parent && *direction!= -1 => Err("Remote history direction must be -1 or 1".into()),
             Self::BrowseRemote { target, .. } if !target.is_empty() => crate::remote_location::normalize(target).map(|_| ()),
             Self::SelectRemote { target, .. } => crate::remote_location::normalize(target).map(|_| ()),
             Self::DismissToast { id } if !crate::messaging::valid_id(id) => Err("invalid toast ID".into()),
@@ -931,7 +933,7 @@ pub fn command_catalog() -> Value {
         "transports": ["native", "http", "json-rpc", "websocket", "tcp-ndjson", "binary-udp"],
         "process": { "status": "/api/process/status", "authoring": "/api/process/authoring", "command": "/api/process/command", "methods": ["pealayer.process.status", "pealayer.process.connect", "pealayer.process.quit"], "scope": "local process, never relayed to authority", "connect": "validated, idempotent, graceful restart; poll local status after reconnect" },
         "messaging": { "contract": "pealayer.messages.v1", "snapshot": "/api/messages", "subscription": "/ws", "publish": "pealayer.toast.show", "dismiss": "pealayer.toast.dismiss", "invoke": "pealayer.toast.invoke", "max_actions": 4, "default_action": "bound action ID", "state": "pealayer.messages.state", "surfaces": ["egui", "web", "terminal"], "persistent_timeout_ms": 0 },
-        "remote_folders": { "browse": "pealayer.remote.browse", "select": "pealayer.remote.select", "sort": "pealayer.remote.sort", "close": "pealayer.remote.close", "state": "/api/remote/state", "thumbnail": "/api/remote/thumbnail", "subscription": "/ws" },
+        "remote_folders": { "browse": "pealayer.remote.browse", "history": "pealayer.remote.history", "select": "pealayer.remote.select", "sort": "pealayer.remote.sort", "close": "pealayer.remote.close", "state": "/api/remote/state", "thumbnail": "/api/remote/thumbnail", "subscription": "/ws" },
         "preferences_navigation": { "method": "pealayer.preferences.navigate", "command": "navigate_preferences", "section": "optional schema section ID", "scroll_y": "absolute logical pixel offset, clamped to content", "scope": "local native process, including its Preferences helper", "accepted": "queued, not confirmation that a frame has rendered" },
         "about_navigation": { "method": "pealayer.about.open", "command": "open_about", "tab": ["overview", "build", "board", "libraries"], "scope": "local native process, never relayed to authority", "accepted": "queued, not confirmation that a frame has rendered" },
         "commands": [
@@ -1391,6 +1393,7 @@ pub struct PlayerStatusResponse {
     /// Presentation only; current_video remains the encoded source identity.
     pub media_display_name: Option<String>,
     pub media_location_display: Option<String>,
+    pub mouse_bindings: crate::pointer_bindings::Bindings,
     pub media_session: crate::platform::media_controls::SessionMetadata,
     pub media_session_capabilities: crate::platform::media_controls::SessionCapabilities,
     pub quick_seek_seconds: f64,
@@ -1755,6 +1758,7 @@ impl Default for PlayerStatusResponse {
             current_video: None,
             media_display_name: None,
             media_location_display: None,
+            mouse_bindings: Default::default(),
             media_session: Default::default(),
             media_session_capabilities: Default::default(),
             quick_seek_seconds: 10.0,
@@ -1948,6 +1952,7 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         "select_remote" | "pealayer.remote.select" => Some(InteropCommand::SelectRemote { target: string(&["target"])? , play: request.params.get("play").and_then(Value::as_bool).unwrap_or(false) }),
         "sort_remote" | "pealayer.remote.sort" => Some(InteropCommand::SortRemote { by: serde_json::from_value(request.params.get("by").cloned().unwrap_or(Value::String("name".into()))).map_err(|_| "sort must be name, date or size".to_string())?, descending: request.params.get("descending").and_then(Value::as_bool).unwrap_or(false) }),
         "close_remote_browser" | "pealayer.remote.close" => Some(InteropCommand::CloseRemoteBrowser),
+        "remote_history" | "pealayer.remote.history" => Some(InteropCommand::RemoteHistory {direction:request.params.get("direction").and_then(Value::as_i64).and_then(|v|i32::try_from(v).ok()).ok_or("direction must be -1 or 1")?,parent:request.params.get("parent").map(|v|v.as_bool().ok_or("parent must be boolean")).transpose()?.unwrap_or(false)}),
         "fullscreen"
         | "set_fullscreen"
         | "pealayer.fullscreen.set" => {
@@ -3751,6 +3756,19 @@ mod tests {
         assert_eq!(command_from_json_rpc(&rpc).unwrap(), Some(copied));
         assert!(parse_text_command("browse_remote javascript:bad").is_err());
         assert!(matches!(parse_text_command("browse_remote").unwrap(), InteropCommand::BrowseRemote { .. }));
+        for (direction, parent) in [(-1, false), (1, false), (-1, true)] {
+            let expected = InteropCommand::RemoteHistory { direction, parent };
+            assert_eq!(parse_interop_request(&serde_json::to_string(&expected).unwrap()).unwrap().1, expected);
+            let rpc = JsonRpcRequest { jsonrpc: Some("2.0".into()), id: Value::Null,
+                method: "pealayer.remote.history".into(), params: serde_json::json!({"direction":direction,"parent":parent}) };
+            assert_eq!(command_from_json_rpc(&rpc).unwrap(), Some(expected));
+        }
+        for params in [serde_json::json!({"direction":0}), serde_json::json!({"direction":1,"parent":true}),
+            serde_json::json!({"direction":-1,"parent":"yes"}), serde_json::json!({"direction":1.5})] {
+            let rpc = JsonRpcRequest { jsonrpc: Some("2.0".into()), id: Value::Null,
+                method: "pealayer.remote.history".into(), params };
+            assert!(command_from_json_rpc(&rpc).is_err());
+        }
     }
 
     #[test]
