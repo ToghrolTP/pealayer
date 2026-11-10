@@ -654,6 +654,7 @@ pub fn run() -> eframe::Result {
                 external_catalog_revision: 0,
                 external_seek_revision: 0,
                 pending_external_media: None,
+                project: crate::app_projects::ProjectSession::default(),
                 pending_external_pause: false,
                 render_context: Arc::new(Mutex::new(Some(RenderContextWrapper(render_context, video_update_pending)))),
                 playback_time: 0.0,

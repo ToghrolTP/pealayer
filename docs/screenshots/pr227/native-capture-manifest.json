@@ -1,0 +1,12 @@
+{
+  "source_revision": "9b4c3c63a023132d4df6e497d40e4a5032599fbd",
+  "executable_sha256": "5b18c4878ef6f9e0bab9e13e987f4352f73067a6f4cfed9d9adb871c8ad55d51",
+  "image": "project-metadata-native-discovery.png",
+  "image_sha256": "cc7f02047e5247fc97a9e2cfe097cbaff98f05e9abbde92aa43b7a4b0d1e8a50",
+  "pixels": [
+    1747,
+    1331
+  ],
+  "capture": "Read-only PrintWindow, Project Metadata opened via an ambiguous synthetic media association",
+  "evidence": "Actual native UI and association discovery with generated media, disconnected board"
+}

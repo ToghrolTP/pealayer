@@ -1159,6 +1159,7 @@ mod seekbar_marker_tests {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct AppConfig {
+    pub project_discovery: crate::projects::Discovery,
     pub external_mpv: crate::mpv::external::Settings,
     pub volume: f64,
     pub is_muted: bool,
@@ -1384,6 +1385,7 @@ pub struct EffectCueSession {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            project_discovery: crate::projects::Discovery::default(),
             external_mpv: crate::mpv::external::Settings::default(),
             volume: 100.0,
             is_muted: false,
@@ -2286,6 +2288,9 @@ impl AppConfig {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        if self.project_discovery.folders.len()>32768 || self.project_discovery.associations.len()>1000 {
+            return Err("Project discovery exceeds folder or remembered association limits".into());
+        }
         self.mouse_bindings.validate()?;
         if [self.simple_workspace.controls_x,self.simple_workspace.controls_y].iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v)) {
             return Err("Simple control position must be between 0 and 1".into());
