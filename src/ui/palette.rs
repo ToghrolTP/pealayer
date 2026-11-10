@@ -146,9 +146,10 @@ mod tests {
         let rect = egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(120.0, 1.0));
         let start = Color32::from_rgb(163, 147, 244);
         let end = Color32::from_rgb(239, 133, 188);
-        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             super::paint_gradient(ui.painter(), rect, 0, start, end, 1.0);
         });
+        output.textures_delta.clear(); // Inspect shapes without uploading textures.
         assert!(output.shapes.iter().any(|shape| match &shape.shape {
             Shape::Mesh(mesh) => mesh.vertices.iter().map(|vertex| vertex.color)
                 .eq([start, end, end, start]),
