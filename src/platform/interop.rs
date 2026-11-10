@@ -2880,9 +2880,12 @@ fn spawn_windows_pipe_listener(
                 thread::sleep(std::time::Duration::from_millis(250));
                 continue;
             }
-            let connected = unsafe { ConnectNamedPipe(handle, None) }.is_ok()
-                || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED;
-            if connected {
+            // Keep an instance registered across requests. Closing the last
+            // instance between clients can make CallNamedPipe fail immediately
+            // because the name no longer exists, even with a wait timeout.
+            while unsafe { ConnectNamedPipe(handle, None) }.is_ok()
+                || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED
+            {
                 let mut request = vec![0u8; 65_536];
                 let mut bytes_read = 0u32;
                 if unsafe { ReadFile(handle, Some(&mut request), Some(&mut bytes_read), None) }
@@ -2909,7 +2912,9 @@ fn spawn_windows_pipe_listener(
                     };
                     let _ = unsafe { FlushFileBuffers(handle) };
                 }
-                let _ = unsafe { DisconnectNamedPipe(handle) };
+                if unsafe { DisconnectNamedPipe(handle) }.is_err() {
+                    break;
+                }
             }
             let _ = unsafe { CloseHandle(handle) };
         }
