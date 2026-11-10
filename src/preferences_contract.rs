@@ -563,7 +563,7 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
         ),
         PreferenceControl::select(
             "color_palette", "appearance", "Interface", "Color palette",
-            &[("native", "Neutral (default)"), ("studio", "Studio")],
+            &[("native", "Neutral (default)"), ("studio", "Studio"), ("pastel", "Pastel")],
         ),
         PreferenceControl::accent(config),
         PreferenceControl::select("local_media_title_format", "appearance", "Window title", "Local media title",

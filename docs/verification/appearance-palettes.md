@@ -1,10 +1,27 @@
 # Appearance palettes and live synchronization
 
-Verified application code: `019d32828427ad2e02882e400b5e48e960856364`, on draft PR [#46](https://github.com/ToghrolTP/pealayer/pull/46). This evidence-only documentation does not change executable sources.
-
 ## Choose a palette
 
-In desktop or Web **Preferences → Appearance → Interface → Color palette**, choose **Neutral (default)** for the original gray palette, or **Studio** for the newer blue-gray palette. Dark/light mode and accent are independent settings. Studio's shared JSON color definitions were preserved unchanged.
+In desktop or Web **Preferences → Appearance → Interface → Color palette**, choose **Neutral (default)** for the original gray palette, **Studio** for blue-gray surfaces, or **Pastel** for slate and lavender surfaces with lilac-to-rose gradients. Theme mode and accent remain independent settings.
+
+## Pastel previews
+
+Pastel uses dark indigo surfaces and cool lavender in light mode. The native menu bar and Web header share an indigo-to-plum gradient above the lilac-to-rose divider. The Web player has an ambient gradient and more visible slider tracks. Hover and press colors distinguish control states without changing their bounds. Media strips and the cyan, mint, and rose chart colors carry forward from the original palette.
+
+| Surface | Before | After |
+| --- | --- | --- |
+| Desktop, dark | [Original](appearance-palettes/pastel-native-dark.png) | [Refined](../screenshots/pastel-refined-native-dark.png) |
+| Desktop, light | [Original](appearance-palettes/pastel-native-light.png) | [Refined](../screenshots/pastel-refined-native-light.png) |
+| Web, dark | [Original](appearance-palettes/pastel-web-dark.png) | [Refined](../screenshots/pastel-refined-web-dark.png) |
+| Web, light | [Original](appearance-palettes/pastel-web-light.png) | [Refined](../screenshots/pastel-refined-web-light.png) |
+
+The Windows captures use the same 800 × 600 logical-point NLE viewport at 150% scale. The Web captures use the same 1418 × 822 viewport. Both use the same paused sample at the start of the clip. The refined native capture ran the clean `769b995` build, and the Web capture used the `b18744d` bundle through the app's Web root override.
+
+Live preview switched both clients between light and dark. Returning to Studio cleared Pastel's Web colors and gradients. The enabled Web control menu used its new hover border with the same bounds before and during hover. Canceling the native light preview restored the saved dark appearance.
+
+## Original Studio and Neutral rollout
+
+This section records the verification for [PR #46](https://github.com/ToghrolTP/pealayer/pull/46) at `019d32828427ad2e02882e400b5e48e960856364`.
 
 The local instance was left on Neutral, with its existing System theme and System accent. Changing factory defaults does not overwrite an explicitly saved Studio preference on another installation.
 
@@ -33,4 +50,4 @@ The local instance was left on Neutral, with its existing System theme and Syste
 - Selected Neutral in Web Preferences: `/api/player/status`, `/api/config`, and the persisted JSON all reported `color_palette: native`.
 - Previewed light Studio / green: the already-open Web Preferences controls and page changed without a reload. Host status and browser DOM agreed on light mode, accent `#38d27a`, surface `#f8fafc`, and text `#17202b`. Canceled this preview; final Neutral dark resolved colors are surface `#202020` and text `#eeeeee`.
 
-Native screenshot verification remains blocked: Windows.Graphics.Capture failed twice with `IGraphicsCaptureItemInterop.CreateForMonitor ... 0x8007041D`. The screenshots above are real browser captures, not native egui proof. No physical hardware was actuated, no remote deployment is claimed, and PR #46 remains unmerged.
+Native screenshot verification for that rollout was blocked: Windows.Graphics.Capture failed twice with `IGraphicsCaptureItemInterop.CreateForMonitor ... 0x8007041D`. The screenshots above are real browser captures, not native egui proof. No physical hardware was actuated, no remote deployment is claimed, and PR #46 remains unmerged.
