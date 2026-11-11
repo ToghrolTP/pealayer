@@ -127,8 +127,31 @@ fn volume_slider_widgets(ui: &mut egui::Ui, mut volume: f64, volume_label: &str,
     (response.changed() || value.changed() || wheel != 0.0).then_some(volume)
 }
 
-pub fn timecode_text(value: impl Into<String>) -> egui::RichText {
-    egui::RichText::new(value).monospace()
+fn transport_time_font(ui: &egui::Ui) -> egui::FontId {
+    egui::FontId::new(
+        egui::TextStyle::Body.resolve(ui.style()).size,
+        super::fonts::status_family(ui),
+    )
+}
+
+pub(super) fn duration_gap(ui: &egui::Ui) -> f32 {
+    ui.spacing().item_spacing.x.min(4.0)
+}
+
+fn transport_time_galley(ui: &egui::Ui, text: &str) -> std::sync::Arc<egui::Galley> {
+    super::numeric_text::layout(
+        ui, text, transport_time_font(ui), egui::Color32::PLACEHOLDER,
+    )
+}
+
+pub(super) fn duration_label_width(ui: &egui::Ui, text: &str, finite: bool) -> f32 {
+    if finite {
+        transport_time_galley(ui, text).size().x
+    } else {
+        ui.painter().layout_no_wrap(
+            text.to_owned(), egui::TextStyle::Body.resolve(ui.style()), egui::Color32::PLACEHOLDER,
+        ).size().x
+    }
 }
 
 /// Add a slider that consumes the horizontal space remaining in its row.
@@ -753,14 +776,20 @@ pub fn draw_elapsed_editor(
     // TextEdit swap used different font padding and allocation rules, which
     // made the time jump when editing began even though the outer row stayed
     // in place.
+    let font = transport_time_font(ui);
+    let color = if !editing && if app.show_four_d_editor {
+        app.native_monitor_style == crate::config::NativeMonitorStyle::FilmCraft
+    } else { app.native_transport_style == crate::config::NativeMonitorStyle::FilmCraft } {
+        super::palette::color(app.color_palette,ui.visuals().dark_mode,"blue")
+    } else { ui.visuals().text_color() };
+    let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, _| {
+        super::numeric_text::layout(ui, text.as_str(), font.clone(), color)
+    };
     let editor = crate::ui::dialog::singleline_text_edit(ui, buffer)
         .id(edit_id)
-        .font(egui::TextStyle::Monospace)
-        .text_color(if !editing && if app.show_four_d_editor {
-            app.native_monitor_style == crate::config::NativeMonitorStyle::FilmCraft
-        } else { app.native_transport_style == crate::config::NativeMonitorStyle::FilmCraft } {
-            super::palette::color(app.color_palette,ui.visuals().dark_mode,"blue")
-        } else { ui.visuals().text_color() })
+        .font(font.clone())
+        .text_color(color)
+        .layouter(&mut layouter)
         .horizontal_align(egui::Align::Center)
         .vertical_align(egui::Align::Center)
         .margin(egui::Margin::symmetric(4, 2))
@@ -912,13 +941,11 @@ pub fn draw_duration_label(
     finite: bool,
 ) -> egui::Response {
     let label = if finite {
-        timecode_text(text.clone())
+        egui::Label::new(transport_time_galley(ui, &text))
     } else {
-        egui::RichText::new(text.clone())
+        egui::Label::new(text.clone())
     };
-    let response = ui
-        .add(egui::Label::new(label).sense(egui::Sense::click()))
-        .on_hover_text(tooltip);
+    let response = ui.add(label.sense(egui::Sense::click())).on_hover_text(tooltip);
     response.context_menu(|ui| {
         if finite {
             copy_time_menu_item(ui, &app.tr("Copy"), &text);
@@ -1180,7 +1207,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 // sequentially. Each callback owns a short exclusive app borrow.
                 let app_cell = std::cell::RefCell::new(&mut *app);
                 let control_owner=ui.make_persistent_id(("control-bar",crate::config::ControlBarSurface::Simple));
-                egui::containers::Sides::new().shrink_left().show(
+                egui::containers::Sides::new().spacing(duration_gap(ui)).shrink_left().show(
                     ui,
                     |ui| {
                         let mut borrowed = app_cell.borrow_mut();
@@ -1351,10 +1378,10 @@ pub fn resolve_display_time(seek_pos: Option<f64>, playback_time: f64) -> f64 {
 }
 
 pub(super) fn elapsed_editor_size(ui: &egui::Ui) -> egui::Vec2 {
-    let font = egui::TextStyle::Monospace.resolve(ui.style());
-    let sample = ui.painter().layout_no_wrap("00:00:00.000".into(), font.clone(), ui.visuals().text_color());
+    let font = transport_time_font(ui);
+    let sample = transport_time_galley(ui, "00:00:00.000");
     let height = ui.fonts_mut(|fonts| fonts.row_height(&font));
-    egui::vec2((sample.size().x + 12.0).max(104.0),
+    egui::vec2(sample.size().x + 12.0,
         (height + 6.0).max(super::control_density::height(ui)))
 }
 
@@ -1498,7 +1525,9 @@ mod tests {
                             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 600.0))),
                             ..Default::default()
                         }, |ui| {
+                            let width = duration_label_width(ui, &text, true);
                             let response = draw_duration_label(&mut app, ui, text.clone(), String::new(), true);
+                            assert!((response.rect.width() - width).abs() < 0.1);
                             rect = response.rect;
                             assert!(!response.clicked(), "menu use must not toggle duration mode");
                         });
@@ -1742,7 +1771,7 @@ mod tests {
         let _guard = crate::app::tests::lock_app_tests();
         for scale in [1.0,1.25,1.5,2.0] { for size in [14.0,20.0,28.0] { for editing in [false,true] {
             let ctx = egui::Context::default(); ctx.set_pixels_per_point(scale);
-            ctx.style_mut_of(ctx.theme(),|style| {style.text_styles.insert(egui::TextStyle::Monospace,egui::FontId::monospace(size));});
+            ctx.style_mut_of(ctx.theme(),|style| {style.text_styles.insert(egui::TextStyle::Body,egui::FontId::proportional(size));});
             let mut app = PealayerApp::default(); app.duration = 120.0; app.playback_time = 63.125;
             if editing { begin_elapsed_edit(&mut app); }
             for _ in 0..2 {

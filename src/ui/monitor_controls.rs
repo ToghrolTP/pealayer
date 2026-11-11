@@ -64,55 +64,22 @@ impl Metrics {
     pub(super) fn measure(app: &PealayerApp, ui: &egui::Ui) -> Self {
         let gap = ui.spacing().item_spacing.x;
         let tracks = super::control_bar::group_width(app, ui, crate::config::ControlBarSurface::Monitor, true);
-        let total = match app.media_timeline_state() {
-            crate::media::MediaTimelineState::Determining => format!(
-                "{} {}",
-                super::icons::HOURGLASS_MEDIUM,
-                app.tr("Determining…")
-            ),
-            crate::media::MediaTimelineState::Live => {
-                format!("{} {}", super::icons::BROADCAST, app.tr("LIVE"))
-            }
-            crate::media::MediaTimelineState::NoMedia => format!("{} --:--", super::icons::CLOCK),
-            crate::media::MediaTimelineState::Finite { .. } => super::controls::format_transport_time(
-                if app.show_remaining_time {
-                    -app.duration
-                } else {
-                    app.duration
-                },
-                app.duration,
-                app.show_subseconds,
-            ),
-        };
-        // The total is monospace for finite timelines and body text otherwise.
-        let font = if matches!(
-            app.media_timeline_state(),
-            crate::media::MediaTimelineState::Finite { .. }
-        ) {
-            egui::TextStyle::Monospace.resolve(ui.style())
-        } else {
-            egui::TextStyle::Body.resolve(ui.style())
-        };
-        let total_width = ui.fonts_mut(|fonts| {
-            fonts
-                .layout_no_wrap(total, font, ui.visuals().text_color())
-                .size()
-                .x
-        });
+        let (total, _, finite) = duration_content(app);
+        let total_width = super::controls::duration_label_width(ui, &total, finite);
+        let duration_gap = super::controls::duration_gap(ui);
+        let elapsed = super::controls::elapsed_editor_size(ui);
         Self {
             transport: super::control_bar::group_width(app, ui, crate::config::ControlBarSurface::Monitor, false),
-            timeline_min: super::controls::elapsed_editor_size(ui).x
-                + MIN_SEEK_WIDTH
-                + total_width
-                + 2.0 * gap,
+            timeline_min: elapsed.x + MIN_SEEK_WIDTH + total_width + gap + duration_gap,
             tracks,
             gap,
-            row_height: button_height(ui).max(super::controls::elapsed_editor_size(ui).y),
+            row_height: button_height(ui).max(elapsed.y),
             gap_y: ui.spacing().item_spacing.y,
             rtl: app.rtl,
             style: app.native_monitor_style,
-            elapsed_width: 104.0 + 72.0 + gap,
-            duration_width: total_width + 72.0 + button_height(ui) + 3.0 * gap,
+            elapsed_width: elapsed.x + 72.0 + gap,
+            duration_width: total_width + 72.0 + super::control_density::height(ui)
+                + 2.0 * duration_gap,
         }
     }
 
@@ -228,6 +195,7 @@ pub(super) fn draw(app: &mut PealayerApp, ui: &mut egui::Ui, metrics: Metrics) {
             let layout = if app.rtl { egui::Layout::left_to_right(egui::Align::Center) }
                 else { egui::Layout::right_to_left(egui::Align::Center) };
             ui.with_layout(layout, |ui| {
+                ui.spacing_mut().item_spacing.x = super::controls::duration_gap(ui);
                 draw_total(app, ui);
                 let h=super::control_density::height(ui);
                 let response=super::craft_theme::icon_button_glyph(ui,"Transport settings",super::icons::GEAR,
@@ -273,7 +241,7 @@ fn draw_preview_selector(app:&mut PealayerApp,ui:&mut egui::Ui,aspect:bool) {
     });
 }
 
-fn draw_total(app: &mut PealayerApp, ui: &mut egui::Ui) {
+fn duration_content(app: &PealayerApp) -> (String, String, bool) {
     let elapsed = app.seek_pos.unwrap_or(app.playback_time);
     let displayed_total = if app.show_remaining_time {
         -(app.duration - elapsed).max(0.0)
@@ -281,7 +249,7 @@ fn draw_total(app: &mut PealayerApp, ui: &mut egui::Ui) {
         app.duration
     };
     let timeline_state = app.media_timeline_state();
-    let (total_label, total_tooltip, finite_timeline) = match timeline_state {
+    match timeline_state {
         crate::media::MediaTimelineState::Determining => (
             format!(
                 "{} {}",
@@ -314,7 +282,11 @@ fn draw_total(app: &mut PealayerApp, ui: &mut egui::Ui) {
             app.tr("Open media to see its duration."),
             false,
         ),
-    };
+    }
+}
+
+fn draw_total(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    let (total_label, total_tooltip, finite_timeline) = duration_content(app);
     let total_response = crate::ui::controls::draw_duration_label(
         app, ui, total_label, total_tooltip, finite_timeline,
     );
@@ -332,6 +304,7 @@ fn draw_timeline(app: &mut PealayerApp, ui: &mut egui::Ui) {
     // A former fixed 180 px reservation was wider than these
     // controls and left a visible, useless tail after fullscreen.
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.spacing_mut().item_spacing.x = super::controls::duration_gap(ui);
         draw_total(app, ui);
         draw_seekbar(app, ui, false);
     });
