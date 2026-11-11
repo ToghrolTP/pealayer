@@ -1969,7 +1969,7 @@ pub fn compute_thumbnail_clip_ratio(
 
 #[cfg(target_os = "windows")]
 pub fn configure_video_taskbar_thumbnail(hwnd_raw: isize) -> Result<(), String> {
-    update_video_taskbar_thumbnail(hwnd_raw, false)
+    update_video_taskbar_thumbnail(hwnd_raw, None)
 }
 
 /// Enables Pealayer's MPV-only iconic thumbnail while media is visible.
@@ -1981,7 +1981,7 @@ pub fn configure_video_taskbar_thumbnail(hwnd_raw: isize) -> Result<(), String> 
 #[cfg(target_os = "windows")]
 pub fn update_video_taskbar_thumbnail(
     hwnd_raw: isize,
-    video_visible: bool,
+    video_rect: Option<[i32; 4]>,
 ) -> Result<(), String> {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::System::Com::{
@@ -1993,6 +1993,7 @@ pub fn update_video_taskbar_thumbnail(
     if hwnd_raw == 0 {
         return Err("invalid window handle (HWND is 0)".to_string());
     }
+    let video_visible = video_rect.is_some_and(|rect| rect[2] > rect[0] && rect[3] > rect[1]);
     crate::platform::taskbar_preview::configure(hwnd_raw, video_visible)?;
     // The shell call always clears the legacy clip. It has no dependency on
     // the video rectangle, which can change as the seek controls reflow.
@@ -2032,7 +2033,7 @@ pub fn configure_video_taskbar_thumbnail(_hwnd_raw: isize) -> Result<(), String>
 #[cfg(not(target_os = "windows"))]
 pub fn update_video_taskbar_thumbnail(
     _hwnd_raw: isize,
-    _video_visible: bool,
+    _video_rect: Option<[i32; 4]>,
 ) -> Result<(), String> {
     Ok(())
 }

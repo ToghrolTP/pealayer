@@ -887,14 +887,21 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     // The same value drives native WM_SIZING, so the outer window and the
     // rendered image cannot drift apart during a Simple-workspace resize.
 
-    let taskbar_video_visible =
-        app.windows_video_taskbar_thumbnail && app.current_video_path.is_some() && dest_rect.is_positive();
+    let taskbar_video_rect =
+        (app.windows_video_taskbar_thumbnail && app.current_video_path.is_some()).then(|| {
+            [
+                (dest_rect.left() * pixels_per_point).round() as i32,
+                (dest_rect.top() * pixels_per_point).round() as i32,
+                (dest_rect.right() * pixels_per_point).round() as i32,
+                (dest_rect.bottom() * pixels_per_point).round() as i32,
+            ]
+        });
     let hwnd = app
         .window_handle
         .unwrap_or_else(crate::platform::windows::get_registered_hwnd);
     if hwnd != 0
         && let Err(error) =
-            crate::platform::windows::update_video_taskbar_thumbnail(hwnd, taskbar_video_visible)
+            crate::platform::windows::update_video_taskbar_thumbnail(hwnd, taskbar_video_rect)
     {
         log::debug!("Could not update taskbar video thumbnail crop: {error}");
     }

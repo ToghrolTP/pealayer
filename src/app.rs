@@ -3220,7 +3220,7 @@ impl PealayerApp {
             .unwrap_or_else(crate::platform::windows::get_registered_hwnd);
         if hwnd != 0 && (!self.windows_video_taskbar_thumbnail || self.current_video_path.is_none())
         {
-            let _ = crate::platform::windows::update_video_taskbar_thumbnail(hwnd, false);
+            let _ = crate::platform::windows::update_video_taskbar_thumbnail(hwnd, None);
         }
         let thumbnail_state = (
             self.is_paused,
