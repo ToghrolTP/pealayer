@@ -14,6 +14,6 @@ fn test_demo_timeline_and_engine_playback_readiness() {
 
     let engine = pealayer::four_d::engine::spawn_engine();
     *engine.serial_port.lock().unwrap() = DEMO_ENDPOINT.to_string();
-    // In demo mode, engine must not require coordinator prepared timeline arming
+    // Selecting the demo endpoint alone does not make a private coordinator ready.
     assert!(!engine.request_prepared_play());
 }
