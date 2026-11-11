@@ -79,3 +79,16 @@ Windows runs passed 30 transport controls and 12 Program Monitor tests.
 | --- | --- | --- |
 | Before | ![Previous displayed timestamps](../screenshots/compact-timecode/before-display.png) | ![Previous elapsed editor restored leading groups](../screenshots/compact-timecode/before-edit.png) |
 | After | ![Compact elapsed and duration](../screenshots/compact-timecode/after-display.png) | ![Compact elapsed editor](../screenshots/compact-timecode/after-edit.png) |
+
+## Compact elapsed field and volume menu
+
+The native elapsed editor now measures the visible timecode and precision. Its
+display and edit states share that width, including short seconds-only values.
+The [elapsed capture](../screenshots/elapsed-compact.png) shows the selected
+seconds group on paused synthetic media.
+
+The [volume capture](../screenshots/volume-menu-boost.png) shows the 100%
+divider and red boost range. The rail and percentage each opened the same
+menu on Windows without changing the level. Reset changed 124% to 100%.
+Mute and Unmute preserved the level, and the boost checkbox persisted.
+The default limit is 100%. The checked setting enables the range through 130%.
