@@ -61,18 +61,26 @@ an announcement never silently changes the board owner or selected coordinator.
 ## Standard LAN discovery alongside binary UDP
 
 The shared Flutter design rejection is recorded in root `AGENTS.md`. Native
-Pealayer now advertises its actual LAN HTTP listeners using `_pealayer._tcp.local.`
-DNS-SD/mDNS, SSDP and MNDP, and browses both desktop apps and controller-mobile.
-Loopback-only development/tests do not start discovery. Source-pinned bounded
-health verification, a four-worker queue, throttled probes/replies and 120-second
-peer expiry keep advertisements separate from verified peers. Own endpoints are
-excluded; no discovery callback claims hardware authority or actuates it.
+Pealayer browses for peers using DNS-SD over mDNS and SSDP even with a
+loopback-only Web/API listener. It advertises `_pealayer._tcp.local.` and
+answers SSDP searches only when its Web/API listener binds a LAN IPv4 address.
+MNDP also uses a LAN listener. Set the Web/API listen addresses to the
+intended LAN interface on each host that should be visible to other peers.
+Review that listener's Web permissions and firewall rules before enabling it.
+
+SSDP searches use an ephemeral reply port on each LAN interface. SSDP
+responses advertise the listener on the actual reply route. A bounded
+health check verifies each endpoint and protocol independently, so both
+discovery paths can contribute to the same peer record. The four-worker
+queue, reply throttling, own-endpoint exclusion and 120-second peer
+expiry still apply. Discovery never claims hardware authority.
 
 Read-only `/api/discovery`, `/api/discovery/peers` and
 `pealayer.discovery.peers` (native IPC, HTTP and WS) describe this process, never
-the consumer's authority proxy. Configured protocols, active local adapters and
-real adapter errors are distinct. mDNS activity follows actual daemon announce
-events. This is not proof of LAN round trips or physical hardware.
+the consumer's authority proxy. `active_protocols` reports local discovery
+activity, `advertising_protocols` reports the local responders and each
+verified peer's `protocols` reports the paths that passed a health check.
+DNS-SD advertises once the daemon reports a local announcement.
 
 MNDP's Digitalogic extensions are `0xff01` product and `0xff02` a big-endian API
 port. Its virtual MAC is application-scoped, not a fake board/NIC identity.
