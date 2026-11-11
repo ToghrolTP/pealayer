@@ -74,13 +74,13 @@ impl Metrics {
                 format!("{} {}", super::icons::BROADCAST, app.tr("LIVE"))
             }
             crate::media::MediaTimelineState::NoMedia => format!("{} --:--", super::icons::CLOCK),
-            crate::media::MediaTimelineState::Finite { .. } => super::controls::format_player_time(
+            crate::media::MediaTimelineState::Finite { .. } => super::controls::format_transport_time(
                 if app.show_remaining_time {
                     -app.duration
                 } else {
                     app.duration
                 },
-                app.duration >= 3600.0,
+                app.duration,
                 app.show_subseconds,
             ),
         };
@@ -275,7 +275,6 @@ fn draw_preview_selector(app:&mut PealayerApp,ui:&mut egui::Ui,aspect:bool) {
 
 fn draw_total(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let elapsed = app.seek_pos.unwrap_or(app.playback_time);
-    let include_hours = app.duration >= 3600.0;
     let displayed_total = if app.show_remaining_time {
         -(app.duration - elapsed).max(0.0)
     } else {
@@ -302,9 +301,9 @@ fn draw_total(app: &mut PealayerApp, ui: &mut egui::Ui) {
             false,
         ),
         crate::media::MediaTimelineState::Finite { .. } => (
-            crate::ui::controls::format_player_time(
+            crate::ui::controls::format_transport_time(
                 displayed_total,
-                include_hours,
+                app.duration,
                 app.show_subseconds,
             ),
             app.tr("Toggle duration / remaining time"),
