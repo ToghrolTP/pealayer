@@ -93,6 +93,10 @@ mod tests {
                         samples[0].size()
                     );
                 }
+                let widths = ["11:11.111", "22:22.222", "00:00.000", "58:58.888"]
+                    .map(|text| layout(ui, text, font.clone(), egui::Color32::WHITE).size().x);
+                assert!(widths.iter().all(|width| (width - widths[0]).abs() * scale < 0.1),
+                    "timecode width changed at {scale}×: {widths:?}");
                 assert!(
                     layout(ui, "WW", font.clone(), egui::Color32::WHITE)
                         .size()
