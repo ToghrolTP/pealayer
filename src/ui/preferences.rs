@@ -2230,6 +2230,7 @@ fn group_icon(group: &str) -> &'static str {
         "Status bar" => crate::ui::icons::GAUGE,
         "Typography" => crate::ui::icons::TEXT_T,
         "Timeline toolbar" => crate::ui::icons::SLIDERS_HORIZONTAL,
+        "Advanced tweaks" => crate::ui::icons::SLIDERS_HORIZONTAL,
         "Sidebar rail" | "Shortcuts" => crate::ui::icons::TABS,
         "Command toolbar" => crate::ui::icons::COMMAND,
         "Terminal" | "Terminal connection" | "Terminal appearance" => crate::ui::icons::TERMINAL_WINDOW,

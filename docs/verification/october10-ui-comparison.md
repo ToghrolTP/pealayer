@@ -61,6 +61,19 @@ not simulated connected boards, effects, playback or telemetry.
 | Effects Library | Original centered heading/Manage effects versus today's leading heading/Effects Designer action. Search/action sizes also differ. | Distinguish intentional naming/layout changes from accidental alignment or hit-target regressions. Empty-state screenshots cannot establish populated-card parity. |
 | Status bar | Original compact normal-weight hardware caption versus current emphasized semantic caption, icon and workspace selector. | Reuse the existing status history and typography tests; these are different original designs, not two screenshots of one late revision. |
 | Preferences | Historical ungrouped navigation and thin selectors versus current grouped navigation, palette swatch, density and typography controls. | Expected newer features remain available; compactness and alignment can be compared without removing them. Both Preferences are separate native windows. |
+
+### Workspace header preferences
+
+The October 10 build inherited its tab strip from egui Dock's extreme background
+and its active tab and body from the window fill. The current workspace
+adapters assign explicit panel and tab surfaces from the live Pealayer palette.
+
+**Appearance → Advanced tweaks** offers **Swap panel and tab colors** to reverse
+the two current surfaces in either renderer. **Round panel tab headers** rounds
+the top corners and keeps the selected tab connected to the body. The CraftUI
+and egui Dock collapse chevrons have separate checkboxes. CraftUI starts with
+them hidden and egui Dock starts with them shown. The settings preview as the
+user edits them and save through the normal Preferences flow.
 | Window placement | The comparison windows required explicit maximization for equal-size capture; a parent returned to normal bounds after the Preferences walkthrough. | Observed behavior only, not a proven root cause or a fix. Check helper/main geometry ownership separately before changing production code. |
 
 ## Preserved installation and safe launch

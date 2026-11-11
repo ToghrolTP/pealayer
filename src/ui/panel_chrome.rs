@@ -10,6 +10,9 @@ use eframe::egui;
 pub(crate) struct HeaderOptions {
     pub close: bool,
     pub collapse: bool,
+    pub dock_collapse: bool,
+    swap_colors: bool,
+    round_tabs: bool,
 }
 impl HeaderOptions {
     pub fn current() -> Self {
@@ -17,7 +20,23 @@ impl HeaderOptions {
         Self {
             close: config.craft_show_close_buttons,
             collapse: config.craft_show_collapse_buttons,
+            dock_collapse: config.egui_dock_show_collapse_buttons,
+            swap_colors: config.workspace_swap_panel_colors,
+            round_tabs: config.workspace_round_panel_tabs,
         }
+    }
+
+    pub fn colors(self, tokens: &super::craft_theme::Tokens) -> (egui::Color32, egui::Color32) {
+        if self.swap_colors {
+            (tokens.tab_bg, tokens.panel_bg)
+        } else {
+            (tokens.panel_bg, tokens.tab_bg)
+        }
+    }
+
+    pub fn tab_corners(self) -> egui::CornerRadius {
+        let radius = if self.round_tabs { 5 } else { 0 };
+        egui::CornerRadius { nw: radius, ne: radius, sw: 0, se: 0 }
     }
 }
 
@@ -342,10 +361,12 @@ fn decorate_tabs(
                 .all_entries()
                 .enumerate()
                 .filter_map(|(index, shape)| {
-                    matches!(&shape.shape, egui::Shape::Text(text)
+                    (matches!(&shape.shape, egui::Shape::Text(text)
                     if text.galley.text().contains(&title)
                         && text.visual_bounding_rect().intersects(rect)
                         && shape.clip_rect.intersects(rect))
+                        || (options.round_tabs && matches!(&shape.shape, egui::Shape::Rect(fill)
+                            if fill.rect == rect && shape.clip_rect.intersects(rect))))
                     .then_some(egui::layers::ShapeIdx(index))
                 })
                 .collect();
@@ -353,6 +374,8 @@ fn decorate_tabs(
                 list.mutate_shape(index, |shape| {
                     if let egui::Shape::Text(text) = &mut shape.shape {
                         center_tab_ink(text, rect, panel.icon().chars().next().unwrap());
+                    } else if let egui::Shape::Rect(fill) = &mut shape.shape {
+                        fill.corner_radius = options.tab_corners();
                     }
                 });
             }
@@ -393,7 +416,8 @@ fn decorate_tabs(
         // narrow elided title out of the close target.
         let mut child = ui.new_child(egui::UiBuilder::new().layer_id(tab.layer_id).max_rect(slot));
         child.set_clip_rect(clip);
-        child.painter().rect_filled(slot, 0.0, fill);
+        let gutter = slot.intersect(rect.shrink2(egui::vec2(0.0, options.tab_corners().nw.into())));
+        child.painter().rect_filled(gutter, 0.0, fill);
         let response = child
             .add_enabled_ui(!blocked && !app.dock_state.locked, |ui| {
                 button(
@@ -429,8 +453,15 @@ pub(crate) fn show(app: &mut crate::app::PealayerApp, ui: &mut egui::Ui, raise: 
     let area = egui::Id::new("workspace_dock_area");
     let mut view = DockViewState::load(ui.ctx());
     let before = view.clone();
+    let options = HeaderOptions::current();
+    let tokens = super::craft_theme::current(ui.ctx());
     let mut style = craft_ui::docking::DockStyle::from_ui(ui);
-    super::craft_theme::apply_dock_style(&mut style, &super::craft_theme::current(ui.ctx()));
+    super::craft_theme::apply_dock_style(&mut style, &tokens);
+    let (panel, tabs) = options.colors(&tokens);
+    style.background = panel;
+    style.active_background = panel;
+    style.floating_background = panel;
+    style.tab_background = tabs;
     style.right_to_left = app.rtl;
     // Normal panels keep Craft's original 40-point body minimum through
     // DockContent::limits. Collapsed panels need a true zero-height body.
@@ -451,7 +482,6 @@ pub(crate) fn show(app: &mut crate::app::PealayerApp, ui: &mut egui::Ui, raise: 
     if let Some(panel) = raise {
         renderer = renderer.raise_panel(panel);
     }
-    let options = HeaderOptions::current();
     let output = renderer.show_content(
         ui,
         &layout,
@@ -867,12 +897,19 @@ mod tests {
         );
         config.craft_show_close_buttons = false;
         config.craft_show_collapse_buttons = true;
+        config.workspace_swap_panel_colors = true;
+        config.workspace_round_panel_tabs = true;
         crate::platform::interop::set_live_config(config);
         let output = frame(&ctx, &mut app, vec![], false);
+        crate::platform::interop::set_live_config(previous);
         assert!(!output.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Text(text) if text.galley.text()==crate::ui::icons::X)));
         assert!(output.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Text(text) if text.galley.text()==crate::ui::icons::CARET_DOWN)));
+        let active_tab = ctx.read_response(tab_id(egui::Id::new("workspace_dock_area"), Tab::EffectControls)).unwrap();
+        let tokens = super::super::craft_theme::current(&ctx);
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Rect(rect)
+            if rect.rect == active_tab.rect && rect.fill == tokens.tab_bg
+                && rect.corner_radius.nw == 5 && rect.corner_radius.sw == 0)));
         assert_eq!(app.dock_state, before);
-        crate::platform::interop::set_live_config(previous);
     }
 
     #[test]

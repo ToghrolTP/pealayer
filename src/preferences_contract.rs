@@ -118,7 +118,8 @@ pub fn preference_groups(controls: &[PreferenceControl], values: &serde_json::Va
             continue;
         }
         let members = controls.iter().filter(|candidate| candidate.section == control.section && candidate.group == control.group);
-        let collapsible = members.clone().all(|control| matches!(control.kind, PreferenceControlKind::File));
+        let collapsible = (control.section, control.group) == ("appearance", "Advanced tweaks")
+            || members.clone().all(|control| matches!(control.kind, PreferenceControlKind::File));
         let configured_count = members.filter(|control| value_at_path(values, control.key)
             .and_then(serde_json::Value::as_str).is_some_and(|value| !value.trim().is_empty())).count();
         groups.push(PreferenceGroup { section: control.section, name: control.group,
@@ -127,7 +128,7 @@ pub fn preference_groups(controls: &[PreferenceControl], values: &serde_json::Va
     // Optional appearance overrides follow the common appearance settings;
     // configuration-file operations close Advanced on every surface.
     groups.sort_by_key(|group| matches!((group.section, group.name),
-        ("appearance", "Application icons") | ("advanced", "Config file")));
+        ("appearance", "Application icons" | "Advanced tweaks") | ("advanced", "Config file")));
     groups
 }
 
@@ -584,7 +585,10 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
         PreferenceControl::select("native_timeline_style", "appearance", "Workspace panels", "Timeline ruler",
             &[("standard", "Standard"), ("film_craft", "FilmCraft")]),
         PreferenceControl::boolean("craft_show_close_buttons", "appearance", "Workspace panels", "Show CraftUI panel close buttons"),
-        PreferenceControl::boolean("craft_show_collapse_buttons", "appearance", "Workspace panels", "Show CraftUI collapse buttons"),
+        PreferenceControl::boolean("workspace_swap_panel_colors", "appearance", "Advanced tweaks", "Swap panel and tab colors"),
+        PreferenceControl::boolean("workspace_round_panel_tabs", "appearance", "Advanced tweaks", "Round panel tab headers"),
+        PreferenceControl::boolean("craft_show_collapse_buttons", "appearance", "Advanced tweaks", "Show CraftUI collapse chevrons"),
+        PreferenceControl::boolean("egui_dock_show_collapse_buttons", "appearance", "Advanced tweaks", "Show egui Dock collapse chevrons"),
         PreferenceControl::boolean("preferences_grouped_navigation", "appearance", "Interface", "Group Preferences navigation"),
         PreferenceControl::choice_slider("ui_control_density", "appearance", "Interface", "Control density",
             &[("extra_compact", "Extra compact"), ("compact", "Compact"), ("regular", "Regular"),
@@ -1570,7 +1574,9 @@ fn semantic_preference_icon(control: &PreferenceControl) -> &'static str {
         "monitor_preview.resolution" => "monitor",
         "native_timeline_style" => "ruler",
         "craft_show_close_buttons" => "x",
-        "craft_show_collapse_buttons" => "caret-down",
+        "craft_show_collapse_buttons" | "egui_dock_show_collapse_buttons" => "caret-down",
+        "workspace_swap_panel_colors" => "palette",
+        "workspace_round_panel_tabs" => "tabs",
         "preferences_grouped_navigation" => "list-checks",
         "ui_font_family" | "monospace_font_family" | "ui_font_name" | "monospace_font_name" => "text-t",
         "language" => "translate",
@@ -1803,21 +1809,34 @@ mod tests {
     }
 
     #[test]
-    fn craft_header_visibility_is_shared_persistent_and_live_previewed() {
+    fn workspace_header_tweaks_are_collapsed_persistent_and_live_previewed() {
         let mut config=crate::config::AppConfig::default();
         assert!(config.craft_show_close_buttons);
         assert!(!config.craft_show_collapse_buttons);
         let contract=super::preferences_contract(&config);
-        for (key,value,icon) in [("craft_show_close_buttons",true,"x"),("craft_show_collapse_buttons",false,"caret-down")] {
+        let advanced = contract.groups.iter().find(|group| group.section == "appearance" && group.name == "Advanced tweaks").unwrap();
+        assert!(advanced.collapsible && !advanced.default_open);
+        for (key,value,icon) in [
+            ("craft_show_close_buttons", true, "x"),
+            ("craft_show_collapse_buttons", false, "caret-down"),
+            ("egui_dock_show_collapse_buttons", true, "caret-down"),
+            ("workspace_swap_panel_colors", false, "palette"),
+            ("workspace_round_panel_tabs", false, "tabs"),
+        ] {
             let row=contract.controls.iter().find(|row|row.key==key).unwrap();
-            assert_eq!(row.group,"Workspace panels");
+            assert_eq!(row.group, if key == "craft_show_close_buttons" { "Workspace panels" } else { "Advanced tweaks" });
             assert_eq!(row.icon,icon);
             assert_eq!(contract.values[key],serde_json::json!(value));
         }
         config.craft_show_close_buttons=false;config.craft_show_collapse_buttons=true;
+        config.egui_dock_show_collapse_buttons = false;
+        config.workspace_swap_panel_colors = true;
+        config.workspace_round_panel_tabs = true;
         let restored:crate::config::AppConfig=serde_json::from_value(serde_json::to_value(&config).unwrap()).unwrap();
         let mut preview=crate::config::AppConfig::default();preview.copy_appearance_from(&restored);
         assert!(!preview.craft_show_close_buttons);assert!(preview.craft_show_collapse_buttons);
+        assert!(!preview.egui_dock_show_collapse_buttons);
+        assert!(preview.workspace_swap_panel_colors && preview.workspace_round_panel_tabs);
     }
     #[test]
     fn density_slider_choices_match_serialized_shared_sizes() {
