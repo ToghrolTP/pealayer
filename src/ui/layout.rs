@@ -8019,8 +8019,7 @@ fn draw_control_card(
                             if let Some(action) = hardware_indicator_action(app, control, indicator_state) {
                                 crate::ui::hardware_control::invoke_action(app, control, action);
                             } else if let Some(id) = relay_id {
-                                let turn_on = indicator_state != ControlIndicatorState::Active;
-                                crate::ui::hardware_control::set_relay(app, id, turn_on);
+                                crate::ui::hardware_control::toggle_relay(app, id);
                             }
                         }
                         if app.prefix_relay_identifiers

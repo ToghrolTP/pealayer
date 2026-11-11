@@ -543,6 +543,7 @@ pub struct EngineHandle {
     pub is_connected: Arc<AtomicBool>,
     pub serial_port: Arc<Mutex<String>>,
     pub active_transport: Arc<Mutex<Option<String>>>,
+    demo_coordinator_address: Arc<Mutex<Option<String>>>,
     pub connection_error: Arc<Mutex<Option<String>>>,
     pub hardware_capabilities: Arc<Mutex<Option<crate::four_d::controller::HardwareCapabilities>>>,
     pub hardware_revision: Arc<AtomicU64>,
@@ -562,7 +563,9 @@ pub struct ControllerPushTarget {
     estop_active: std::sync::Weak<AtomicBool>,
     is_playing: std::sync::Weak<AtomicBool>,
     connection_requested: std::sync::Weak<AtomicBool>,
+    is_connected: std::sync::Weak<AtomicBool>,
     serial_port: std::sync::Weak<Mutex<String>>,
+    demo_coordinator_address: std::sync::Weak<Mutex<Option<String>>>,
     hardware_capabilities:
         std::sync::Weak<Mutex<Option<crate::four_d::controller::HardwareCapabilities>>>,
     hardware_revision: std::sync::Weak<AtomicU64>,
@@ -609,7 +612,9 @@ impl EngineHandle {
             estop_active: Arc::downgrade(&self.estop_active),
             is_playing: Arc::downgrade(&self.is_playing),
             connection_requested: Arc::downgrade(&self.connection_requested),
+            is_connected: Arc::downgrade(&self.is_connected),
             serial_port: Arc::downgrade(&self.serial_port),
+            demo_coordinator_address: Arc::downgrade(&self.demo_coordinator_address),
             hardware_capabilities: Arc::downgrade(&self.hardware_capabilities),
             hardware_revision: Arc::downgrade(&self.hardware_revision),
             catalog_refresh_requested: Arc::downgrade(&self.catalog_refresh_requested),
@@ -714,6 +719,13 @@ impl ControllerPushTarget {
             return None;
         }
         let endpoint = self.serial_port.upgrade()?.lock().ok()?.clone();
+        if super::controller::is_demo_endpoint(&endpoint) {
+            if !self.is_connected.upgrade()?.load(Ordering::Acquire) {
+                return None;
+            }
+            let address = self.demo_coordinator_address.upgrade()?.lock().ok()?.clone()?;
+            return Some(format!("ws://{address}/ipc"));
+        }
         if endpoint.starts_with("udp://") {return Some(endpoint);}
         if !crate::four_d::controller::is_controller_endpoint(&endpoint) {
             return None;
@@ -959,6 +971,7 @@ pub(crate) fn memory_only_test_engine() -> EngineHandle {
         is_connected: Arc::new(AtomicBool::new(false)),
         serial_port: Arc::new(Mutex::new(super::controller::DEFAULT_ENDPOINT.into())),
         active_transport: Arc::new(Mutex::new(None)),
+        demo_coordinator_address: Arc::new(Mutex::new(None)),
         connection_error: Arc::new(Mutex::new(None)),
         hardware_capabilities: Arc::new(Mutex::new(None)),
         hardware_revision: Arc::new(AtomicU64::new(1)),
@@ -985,6 +998,7 @@ pub fn spawn_engine() -> EngineHandle {
         crate::four_d::controller::DEFAULT_ENDPOINT.to_string(),
     ));
     let active_transport_description = Arc::new(Mutex::new(None));
+    let demo_coordinator_address = Arc::new(Mutex::new(None));
     let connection_error = Arc::new(Mutex::new(None));
     let hardware_capabilities = Arc::new(Mutex::new(None));
     let hardware_revision = Arc::new(AtomicU64::new(1));
@@ -1005,6 +1019,7 @@ pub fn spawn_engine() -> EngineHandle {
     let engine_connected = Arc::clone(&is_connected);
     let engine_port = Arc::clone(&serial_port);
     let engine_transport_description = Arc::clone(&active_transport_description);
+    let engine_demo_coordinator_address = Arc::clone(&demo_coordinator_address);
     let engine_conn_error = Arc::clone(&connection_error);
     let engine_capabilities = Arc::clone(&hardware_capabilities);
     let engine_hardware_revision = Arc::clone(&hardware_revision);
@@ -1103,6 +1118,12 @@ pub fn spawn_engine() -> EngineHandle {
                 };
                 match transport {
                     Ok(transport) => {
+                        if let Ok(mut address) = engine_demo_coordinator_address.lock() {
+                            *address = match &transport {
+                                HardwareTransport::Demo(session) => Some(session.client.endpoint().to_owned()),
+                                _ => None,
+                            };
+                        }
                         let description = transport.description();
                         println!("[Engine] Connected hardware transport: {}", description);
                         if let Ok(mut guard) = engine_transport_description.lock() {
@@ -1176,7 +1197,7 @@ pub fn spawn_engine() -> EngineHandle {
                             }
                             active_strip_effect = None;
                         }
-                        engine_connected.store(true, Ordering::Relaxed);
+                        engine_connected.store(true, Ordering::Release);
                         connected = true;
                         let estop_reassert_error = engine_estop
                             .load(Ordering::SeqCst)
@@ -1963,6 +1984,7 @@ pub fn spawn_engine() -> EngineHandle {
         is_connected,
         serial_port,
         active_transport: active_transport_description,
+        demo_coordinator_address,
         connection_error,
         hardware_capabilities,
         hardware_revision,
@@ -2216,6 +2238,7 @@ fn spawn_peer_engine() -> EngineHandle {
         prepared_timeline:Arc::new(Mutex::new(super::media_timeline::PreparedTimeline::default())),media_clock_owned:Arc::new(AtomicBool::new(false)),
         is_playing:Arc::new(AtomicBool::new(false)),estop_active:Arc::new(AtomicBool::new(false)),connection_requested:Arc::new(AtomicBool::new(true)),is_connected:Arc::new(AtomicBool::new(false)),
         serial_port:Arc::new(Mutex::new(crate::peer::client().unwrap().origin.to_string())),active_transport:Arc::new(Mutex::new(Some("pealayer:remote".into()))),
+        demo_coordinator_address: Arc::new(Mutex::new(None)),
         connection_error:Arc::new(Mutex::new(None)),hardware_capabilities:Arc::new(Mutex::new(None)),hardware_revision:Arc::new(AtomicU64::new(1)),controller_call_results:Arc::new(Mutex::new(VecDeque::new())),
         catalog_refresh_requested:Arc::new(AtomicBool::new(false)),rf_catalog_refresh_requested:Arc::new(AtomicBool::new(false)),state_notifier:Arc::new(Mutex::new(None)),sender:tx,
     };
@@ -3320,6 +3343,32 @@ mod tests {
         assert_eq!(target.websocket_endpoint(), None);
         drop(handle);
         assert!(!target.is_alive());
+    }
+
+    #[test]
+    fn controller_push_target_tracks_private_demo_coordinator() {
+        let handle = memory_only_test_engine();
+        let target = handle.controller_push_target();
+        *handle.serial_port.lock().unwrap() = super::super::controller::DEMO_ENDPOINT.into();
+        handle.connection_requested.store(true, Ordering::Relaxed);
+        assert_eq!(target.websocket_endpoint(), None);
+
+        *handle.demo_coordinator_address.lock().unwrap() = Some("127.0.0.1:19001".into());
+        assert_eq!(target.websocket_endpoint(), None);
+        handle.is_connected.store(true, Ordering::Release);
+        assert_eq!(target.websocket_endpoint().as_deref(), Some("ws://127.0.0.1:19001/ipc"));
+
+        handle.is_connected.store(false, Ordering::Release);
+        assert_eq!(target.websocket_endpoint(), None);
+        *handle.demo_coordinator_address.lock().unwrap() = Some("127.0.0.1:19002".into());
+        handle.is_connected.store(true, Ordering::Release);
+        assert_eq!(target.websocket_endpoint().as_deref(), Some("ws://127.0.0.1:19002/ipc"));
+
+        *handle.serial_port.lock().unwrap() = "direct:COM9".into();
+        assert_eq!(target.websocket_endpoint(), None);
+        *handle.serial_port.lock().unwrap() = super::super::controller::DEMO_ENDPOINT.into();
+        handle.connection_requested.store(false, Ordering::Relaxed);
+        assert_eq!(target.websocket_endpoint(), None);
     }
 
     #[test]

@@ -1798,6 +1798,10 @@ impl ControllerClient {
         result
     }
 
+    pub(crate) fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+
     pub fn transport_description(&self) -> String {
         match &self.backend {
             ControllerBackend::Embedded(_) => "embedded".to_string(),
