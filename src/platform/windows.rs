@@ -187,7 +187,7 @@ static SHELL_HAS_MEDIA: AtomicBool = AtomicBool::new(false);
 static SHELL_MEDIA_KEYS_ENABLED: AtomicBool = AtomicBool::new(true);
 static SHELL_REINITIALIZE: AtomicBool = AtomicBool::new(false);
 static TASKBAR_BUTTON_CREATED_MESSAGE: AtomicU32 = AtomicU32::new(0);
-static TASKBAR_THUMBNAIL_CLIP: Mutex<Option<(isize, Option<[i32; 4]>)>> = Mutex::new(None);
+static TASKBAR_THUMBNAIL_CLIP_CLEARED_FOR: Mutex<Option<isize>> = Mutex::new(None);
 static THUMBNAIL_METRICS_DIRTY: AtomicBool = AtomicBool::new(true);
 static THUMBNAIL_TOOLBAR_ADDED_HWND: AtomicIsize = AtomicIsize::new(0);
 static THUMBNAIL_TOOLBAR_ADD_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
@@ -1986,36 +1986,41 @@ pub fn update_video_taskbar_thumbnail(
     use windows::Win32::Foundation::HWND;
     use windows::Win32::System::Com::{
         CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+        CoUninitialize,
     };
     use windows::Win32::UI::Shell::{ITaskbarList3, TaskbarList};
 
     if hwnd_raw == 0 {
         return Err("invalid window handle (HWND is 0)".to_string());
     }
-    let normalized = video_rect.filter(|rect| rect[2] > rect[0] && rect[3] > rect[1]);
-    crate::platform::taskbar_preview::configure(hwnd_raw, normalized.is_some())?;
-    if TASKBAR_THUMBNAIL_CLIP
+    let video_visible = video_rect.is_some_and(|rect| rect[2] > rect[0] && rect[3] > rect[1]);
+    crate::platform::taskbar_preview::configure(hwnd_raw, video_visible)?;
+    // The shell call always clears the legacy clip. It has no dependency on
+    // the video rectangle, which can change as the seek controls reflow.
+    if TASKBAR_THUMBNAIL_CLIP_CLEARED_FOR
         .lock()
-        .is_ok_and(|cached| *cached == Some((hwnd_raw, normalized)))
+        .is_ok_and(|cached| *cached == Some(hwnd_raw))
     {
         return Ok(());
     }
     let hwnd = HWND(hwnd_raw as *mut _);
-    unsafe {
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-        let taskbar: ITaskbarList3 = CoCreateInstance(&TaskbarList, None, CLSCTX_INPROC_SERVER)
-            .map_err(|error| format!("create taskbar thumbnail service: {error}"))?;
-        taskbar
-            .HrInit()
-            .map_err(|error| format!("initialize taskbar thumbnail service: {error}"))?;
-        // Clear any clip left by an older build. The iconic bitmap already
-        // contains video only and must not be cropped a second time.
-        taskbar
-            .SetThumbnailClip(hwnd, std::ptr::null())
-            .map_err(|error| format!("clear legacy taskbar thumbnail clip: {error}"))?;
-    }
-    if let Ok(mut cached) = TASKBAR_THUMBNAIL_CLIP.lock() {
-        *cached = Some((hwnd_raw, normalized));
+    let result = unsafe {
+        let initialized = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
+        let result = (|| -> windows::core::Result<()> {
+            let taskbar: ITaskbarList3 =
+                CoCreateInstance(&TaskbarList, None, CLSCTX_INPROC_SERVER)?;
+            taskbar.HrInit()?;
+            // The explicit iconic bitmap already contains only the video.
+            taskbar.SetThumbnailClip(hwnd, std::ptr::null())
+        })();
+        if initialized {
+            CoUninitialize();
+        }
+        result
+    };
+    result.map_err(|error| format!("clear legacy taskbar thumbnail clip: {error}"))?;
+    if let Ok(mut cached) = TASKBAR_THUMBNAIL_CLIP_CLEARED_FOR.lock() {
+        *cached = Some(hwnd_raw);
     }
     Ok(())
 }
@@ -2400,7 +2405,7 @@ pub(crate) fn detach_taskbar_application_icon(hwnd_raw: isize) -> Result<(),Stri
 
 pub fn take_shell_reinitialize_request() -> bool {
     let requested = SHELL_REINITIALIZE.swap(false, Ordering::AcqRel);
-    if requested && let Ok(mut cached) = TASKBAR_THUMBNAIL_CLIP.lock() {
+    if requested && let Ok(mut cached) = TASKBAR_THUMBNAIL_CLIP_CLEARED_FOR.lock() {
         *cached = None;
     }
     requested

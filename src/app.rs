@@ -1070,6 +1070,12 @@ pub struct MediaTrackInfo {
 }
 
 impl eframe::App for PealayerApp {
+    fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
+        // The window clears before egui paints. Match its opaque client area;
+        // the Program Monitor still paints its configured fullscreen backdrop.
+        visuals.panel_fill.to_opaque().to_normalized_gamma_f32()
+    }
+
     fn raw_input_hook(&mut self,_ctx:&egui::Context,raw:&mut egui::RawInput) {
         #[cfg(windows)]
         if self.native_service_policy==NativeServicePolicy::Production {crate::platform::drop_target::input(raw);}
@@ -4551,20 +4557,15 @@ impl PealayerApp {
             InteropCommand::SeekTo { seconds } => {
                 if self.is_seekable {
                     let target = seconds.max(0.0).min(self.duration);
-                    self.scrub_to(target);
                     self.finish_scrub(target);
                 }
             }
             InteropCommand::ScrubTo { seconds } => self.scrub_to(seconds),
-            InteropCommand::FinishScrub { seconds } => {
-                if !self.is_scrubbing { self.scrub_to(seconds); }
-                self.finish_scrub(seconds);
-            }
+            InteropCommand::FinishScrub { seconds } => self.finish_scrub(seconds),
             InteropCommand::SeekAbs { percentage } => {
                 if self.is_seekable {
                     let clamped = percentage.clamp(0.0, 100.0);
                     let target = self.duration * (clamped / 100.0);
-                    self.scrub_to(target);
                     self.finish_scrub(target);
                 }
             }
@@ -6819,7 +6820,6 @@ impl PealayerApp {
         let target = (self.playback_time + seconds).clamp(0.0, self.duration.max(0.0));
         // Use the same exact-commit lifecycle as absolute/timeline seeks so a
         // paused relative seek also retains a sub-frame authoring position.
-        self.scrub_to(target);
         self.finish_scrub(target);
         let sign = if seconds > 0.0 { "+" } else { "" };
         self.set_osd(format!("Seek: {}{:.0}s", sign, seconds));
@@ -6832,10 +6832,6 @@ impl PealayerApp {
             return;
         }
         let target = seconds.clamp(0.0, self.duration.max(0.0));
-        // Establish the same pause/preview state used by a drag before queuing
-        // the exact commit. Otherwise a click-to-seek can resume from the old
-        // frame while the background worker has not executed the seek yet.
-        self.scrub_to(target);
         self.finish_scrub(target);
         self.set_osd(format!(
             "{}: {}",
@@ -6968,25 +6964,7 @@ impl PealayerApp {
             target_time.max(0.0)
         };
 
-        if !self.is_scrubbing {
-            self.is_scrubbing = true;
-            if self.pending_scrub_commit.take().is_none() {
-                self.was_playing_before_scrub = !self.is_paused
-                    && self.current_video_path.is_some()
-                    && !self.is_playback_finished();
-                if self.was_playing_before_scrub {
-                    let _ = self.mpv.set_property("pause", true);
-                    self.is_paused = true;
-                    self.engine_handle
-                        .is_playing
-                        .store(false, std::sync::atomic::Ordering::Relaxed);
-                }
-                self.commit_recorded_samples();
-            }
-            self.seek_epoch = self.seek_epoch.wrapping_add(1);
-            self.native_seek_client.finish();
-        }
-
+        self.begin_scrub();
         if clamped < self.duration {
             self.is_eof = false;
         }
@@ -7002,12 +6980,35 @@ impl PealayerApp {
         }
     }
 
+    fn begin_scrub(&mut self) {
+        if self.is_scrubbing {
+            return;
+        }
+        self.is_scrubbing = true;
+        if self.pending_scrub_commit.take().is_none() {
+            self.was_playing_before_scrub = !self.is_paused
+                && self.current_video_path.is_some()
+                && !self.is_playback_finished();
+            if self.was_playing_before_scrub {
+                let _ = self.mpv.set_property("pause", true);
+                self.is_paused = true;
+                self.engine_handle.is_playing.store(false, Ordering::Relaxed);
+            }
+            self.commit_recorded_samples();
+        }
+        self.seek_epoch = self.seek_epoch.wrapping_add(1);
+        self.native_seek_client.finish();
+    }
+
     /// Ends an active scrub session. Dispatches a final exact commit seek and
     /// restores playback if the video was playing prior to scrubbing.
     pub fn finish_scrub(&mut self, target_time: f64) {
         if !self.is_seekable {
             return;
         }
+        // Discrete seeks use the same pause/resume lifecycle as a drag.
+        // Only an ongoing drag needs preview requests before the exact seek.
+        self.begin_scrub();
         let clamped = if self.duration > 0.0 {
             target_time.clamp(0.0, self.duration)
         } else {
