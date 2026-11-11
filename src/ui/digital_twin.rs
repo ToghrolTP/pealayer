@@ -36,12 +36,6 @@ fn draw_front_panel(app: &mut PealayerApp, ui: &mut egui::Ui, caps: &HardwareCap
             app.board_operation_status = error;
         }
     });
-    if crate::four_d::controller::is_demo_endpoint(&app.serial_port) && !crate::peer::active() {
-        let label = app.tr("Virtual buzzer audio");
-        if ui.checkbox(&mut app.virtual_buzzer_audio, label).changed() {
-            app.save_config();
-        }
-    }
     if let Some(panel) = panel.filter(|p| p.raw_segments.len() == 4) {
         super::board_info::seven_segment_preview(
             ui,
@@ -100,6 +94,15 @@ fn draw_front_panel(app: &mut PealayerApp, ui: &mut egui::Ui, caps: &HardwareCap
         && panel.is_none()
     {
         ui.add(egui::Label::new(egui::RichText::new(&app.board_operation_status).weak()).wrap());
+    }
+    if caps.supports_buzzer_controls()
+        && crate::four_d::controller::is_demo_endpoint(&app.serial_port)
+        && !crate::peer::active()
+    {
+        let label = app.tr("Virtual buzzer audio");
+        if ui.checkbox(&mut app.virtual_buzzer_audio, label).changed() {
+            app.save_config();
+        }
     }
 }
 
@@ -244,8 +247,13 @@ pub(super) fn draw_digital_twin_card(
     let width = (ui.available_width() - frame.total_margin().sum().x).max(1.0);
     frame.show(ui, |ui| {
         ui.set_width(width);
-        ui.horizontal(|ui| {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        let title = app.tr("Virtual Board Digital Twin");
+        egui::containers::Sides::new().shrink_left().show(
+            ui,
+            |ui| {
+                ui.add(egui::Label::new(egui::RichText::new(title).strong()).truncate());
+            },
+            |ui| {
                 let float_icon = if app.show_digital_twin_window {
                     crate::ui::icons::X
                 } else {
@@ -264,14 +272,8 @@ pub(super) fn draw_digital_twin_card(
                 {
                     app.show_digital_twin_window = !app.show_digital_twin_window;
                 }
-                ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(app.tr("Virtual Board Digital Twin")).strong(),
-                    )
-                    .truncate(),
-                );
-            });
-        });
+            },
+        );
         if !app.show_digital_twin_window {
             ui.add_space(8.0);
             draw_twin_body(app, ui, caps);
@@ -295,15 +297,14 @@ fn draw_twin_body(app: &mut PealayerApp, ui: &mut egui::Ui, caps: &HardwareCapab
                 frozen,
             );
             ui.horizontal_wrapped(|ui| {
-                ui.weak(format!(
-                    "{} · {:.2} s",
-                    app.tr("Full travel"),
-                    sample.full_travel_ms as f32 / 1000.0
-                ));
+                ui.weak(app.tr("Full travel"));
                 if crate::four_d::controller::is_demo_endpoint(&app.serial_port)
                     && !crate::peer::active()
                 {
-                    let mut seconds = f64::from(app.virtual_seat_travel_ms) / 1000.0;
+                    let draft = ui.make_persistent_id("virtual-travel-seconds-drag");
+                    let mut seconds = ui
+                        .data(|data| data.get_temp::<f64>(draft))
+                        .unwrap_or(f64::from(sample.full_travel_ms) / 1000.0);
                     let setting = ui
                         .add_enabled(
                             app.board_operation.is_none(),
@@ -315,12 +316,22 @@ fn draw_twin_body(app: &mut PealayerApp, ui: &mut egui::Ui, caps: &HardwareCapab
                                 .update_while_editing(false),
                         )
                         .on_hover_text(app.tr("Type the full travel time in seconds"));
-                    if setting.changed()
-                        && let Err(error) =
-                            app.set_virtual_seat_travel((seconds * 1000.0).round() as u32)
-                    {
-                        app.set_osd(error);
+                    if setting.dragged() {
+                        ui.data_mut(|data| data.insert_temp(draft, seconds));
+                    } else if setting.drag_stopped() || setting.changed() {
+                        ui.data_mut(|data| data.remove::<f64>(draft));
+                        let milliseconds = (seconds * 1000.0).round() as u32;
+                        if milliseconds != sample.full_travel_ms
+                            && let Err(error) = app.set_virtual_seat_travel(milliseconds)
+                        {
+                            app.set_osd(error);
+                        }
                     }
+                } else {
+                    ui.label(format!(
+                        "{:.2} s",
+                        f64::from(sample.full_travel_ms) / 1000.0
+                    ));
                 }
             });
         } else {

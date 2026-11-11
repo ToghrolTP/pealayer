@@ -15040,7 +15040,7 @@ impl<'a> PealayerTabViewer<'a> {
                             channel_folders::draw_dialogs(self.app, ui, capabilities);
                         }
                         ui.horizontal_wrapped(|ui| {
-                            ui.heading(self.app.tr("Hardware Monitor Dashboard"));
+                            ui.heading(self.app.tr("Hardware Monitor"));
                             if crate::ui::hardware_control::channel_manager_available(
                                 self.app.is_connected,
                                 capabilities.as_ref(),

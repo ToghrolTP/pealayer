@@ -1204,7 +1204,8 @@ pub(super) fn seven_segment_preview(ui: &mut egui::Ui, raw_segments: &[u8], brig
     let scale = (available_width / 224.0).min(1.45);
     let digit_width = 40.0_f32 * scale;
     let gap = 6.0_f32 * scale;
-    let content_width = digit_width * 4.0 + gap * 3.0;
+    let center_gap = 13.0_f32 * scale;
+    let content_width = digit_width * 4.0 + gap * 2.0 + center_gap;
     let outer_size = egui::vec2(available_width, 72.0 * scale);
     let (rect, _) = ui.allocate_exact_size(outer_size, egui::Sense::hover());
     let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
@@ -1223,7 +1224,8 @@ pub(super) fn seven_segment_preview(ui: &mut egui::Ui, raw_segments: &[u8], brig
     let lit = egui::Color32::from_rgba_unmultiplied(255, 174, 38, lit_alpha);
     let dim = egui::Color32::from_rgba_unmultiplied(194, 181, 205, 35);
     for (digit, mask) in raw_segments.iter().take(4).enumerate() {
-        let offset = egui::vec2(digit as f32 * (digit_width + gap), 0.0);
+        let middle_inset = if digit >= 2 { center_gap - gap } else { 0.0 };
+        let offset = egui::vec2(digit as f32 * (digit_width + gap) + middle_inset, 0.0);
         for (bit, (start, end)) in LINES.into_iter().enumerate() {
             let color = if active && mask & (1 << bit) != 0 { lit } else { dim };
             painter.line_segment(
@@ -1234,12 +1236,15 @@ pub(super) fn seven_segment_preview(ui: &mut egui::Ui, raw_segments: &[u8], brig
                 egui::Stroke::new(5.0_f32 * scale, color),
             );
         }
-        let dot = |y| origin + egui::vec2(36.0, y) * scale + offset;
         let dot_ink = if active && mask & 0x80 != 0 { lit } else { dim };
         if digit == 1 {
-            for y in [21.5, 37.5] { painter.circle_filled(dot(y), 2.2 * scale, dot_ink); }
+            for y in [21.5, 37.5] {
+                let dot = origin + offset + egui::vec2(digit_width + center_gap * 0.5, y * scale);
+                painter.circle_filled(dot, 2.2 * scale, dot_ink);
+            }
         } else {
-            painter.circle_filled(dot(54.0), 2.2 * scale, dot_ink);
+            let dot = origin + offset + egui::vec2(36.0, 54.0) * scale;
+            painter.circle_filled(dot, 2.2 * scale, dot_ink);
         }
     }
 }

@@ -113,7 +113,7 @@ impl DemoCoordinatorSession {
         let travel_ms = crate::platform::interop::get_live_config().virtual_seat_travel_ms.clamp(100, 60_000);
         let config = json!({
             "connection": { "virtual_seat_travel_ms": travel_ms },
-            "peripheral_names": { "seat.a": "Left side", "seat.b": "Right side" },
+            "ui": { "peripheral_names": { "seat.a": "Left side", "seat.b": "Right side" } },
             "integrations": {
                 "discovery": {
                     "mndp_enabled": false,
