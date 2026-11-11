@@ -26,7 +26,11 @@ allow an isolated package to use verified companion builds.
   **Right side** to highlight it. In 3D, drag to rotate and Shift-drag or
   right-drag to pan. Use **Reset view** to return to the initial camera.
 - Full travel defaults to 3 seconds. The local twin changes it on the
-  coordinator and remembers the setting for its next private session.
+  coordinator and remembers the setting for its next private session. The
+  equivalent IPC request is
+  `{"command":"set_virtual_seat_travel","full_travel_ms":3000}`.
+  JSON-RPC uses `pealayer.hardware.virtual_seat_travel.set` with the same
+  `full_travel_ms` parameter.
 
 ## Verification
 
@@ -40,3 +44,6 @@ matching seven-segment masks `3F BF 3F 4F` in firmware and Pealayer. The same
 coordinator acknowledged playback advancing and pausing.
 
 The fixture used a Virtual Board with no physical peripheral mappings.
+Read-only PCController catalog queries against the physical cinema profile
+confirmed `seat.a` as Seat Left and `seat.b` as Seat Right, with raw seat
+relays hidden. The private Virtual Board uses those same defaults.

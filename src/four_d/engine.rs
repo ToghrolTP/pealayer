@@ -313,6 +313,12 @@ fn controller_call_allowed_during_estop(method: &str, params: &serde_json::Value
     if method == "controller.pwm.off" {
         return true;
     }
+    if method == "controller.front_panel" {
+        return true;
+    }
+    if method == "controller.front_panel.key" {
+        return params["hold_ms"].as_u64() == Some(0);
+    }
     if method != "controller.command.execute" {
         return false;
     }
@@ -1540,6 +1546,10 @@ pub fn spawn_engine() -> EngineHandle {
                         let result = if deadline.is_some_and(|deadline| std::time::Instant::now()>=deadline) {
                             let mut error: super::controller::ControllerRpcError="hardware command expired before dispatch".to_string().into();
                             error.outcome=Some("rejected".into());Err(error)
+                        } else if operation.starts_with("board-virtual-seat-travel:")
+                            && !matches!(active_transport, Some(HardwareTransport::Demo(_)))
+                        {
+                            Err("The local Virtual Board connection changed before applying seat travel".to_string().into())
                         } else if engine_estop.load(Ordering::SeqCst)
                             && !controller_call_allowed_during_estop(&method, &params)
                         {

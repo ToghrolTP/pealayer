@@ -1010,6 +1010,21 @@ impl HardwareCapabilities {
                 if self.telemetry.hot == Some(active) { false }
                 else { self.telemetry.hot = Some(active); true }
             }
+            Some("key") if self.supports_virtual_panel_keys && self.port.product == "PCController Virtual Board"
+                && event["source"] == "physical" => {
+                let Some(key) = event["key"].as_u64().filter(|key| (1..=4).contains(key)) else {
+                    return false;
+                };
+                let Some(panel) = self.front_panel.as_mut() else { return false; };
+                let mask = 1 << (key - 1);
+                let previous = panel.pressed_keys;
+                match event["gesture"].as_str() {
+                    Some("down") => panel.pressed_keys |= mask,
+                    Some("up") => panel.pressed_keys &= !mask,
+                    _ => return false,
+                }
+                panel.pressed_keys != previous
+            }
             Some("front_panel.segment") => {
                 let Some(metadata) = event.get("metadata").filter(|value| value.is_object()) else {
                     return false;

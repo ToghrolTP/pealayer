@@ -382,6 +382,7 @@ pub enum InteropCommand {
     },
     RefreshHardwareCatalog,
     SetHardwareConnection { connected: bool },
+    SetVirtualSeatTravel { full_travel_ms: u32 },
     HardwareAuthority {
         operation: String,
         #[serde(default)]
@@ -671,6 +672,9 @@ impl InteropCommand {
             }
             Self::SetHardwarePwmPolicy { channel, .. } if *channel >= 16 => {
                 Err("PWM policy channel must be from 0 to 15".to_string())
+            }
+            Self::SetVirtualSeatTravel { full_travel_ms } if !(100..=60_000).contains(full_travel_ms) => {
+                Err("Virtual seat travel must be between 100 and 60000 ms".into())
             }
             Self::PlayHardwareMelody { name, repeats }
                 if name.trim().is_empty() || name.len() > 64 || *repeats > 20 =>
@@ -966,7 +970,7 @@ pub fn command_catalog() -> Value {
             "start_addressable_strip_effect", "stop_addressable_strip",
             "refresh_addressable_strip_status", "clear_addressable_strip",
             "hardware.strip.color_order", "controller_effect.restore_examples", "controller_effect.strip.edit",
-            "press_front_panel_key", "board_information", "rf_control", "open_rf_manager"
+            "press_front_panel_key", "set_virtual_seat_travel", "board_information", "rf_control", "open_rf_manager"
         ],
         "json_rpc_prefix": "pealayer",
         "hardware_connection": {"method":"pealayer.hardware.connection","command":"set_hardware_connection","params":{"connected":"required boolean"},"scope":"current session authority; existing configured endpoint"},
@@ -2391,6 +2395,11 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         }
         "pealayer.hardware.connection" => Some(InteropCommand::SetHardwareConnection {
             connected: request.params.get("connected").and_then(Value::as_bool).ok_or("Hardware connection requires connected: true or false")?,
+        }),
+        "pealayer.hardware.virtual_seat_travel.set" => Some(InteropCommand::SetVirtualSeatTravel {
+            full_travel_ms: request.params["full_travel_ms"].as_u64()
+                .and_then(|value| u32::try_from(value).ok())
+                .ok_or("Virtual seat travel requires full_travel_ms")?,
         }),
         "pealayer.hardware.authority" => {
             let operation = string(&["operation"])?;

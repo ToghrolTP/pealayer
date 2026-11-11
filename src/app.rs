@@ -5296,6 +5296,11 @@ impl PealayerApp {
                     self.set_osd("Hardware connection engine is unavailable".into());
                 }
             }
+            InteropCommand::SetVirtualSeatTravel { full_travel_ms } => {
+                if let Err(error) = self.set_virtual_seat_travel(full_travel_ms) {
+                    self.set_osd(error);
+                }
+            }
             InteropCommand::HardwareAuthority { operation, requester_id } => {
                 crate::four_d::authority::request(self, &operation, &requester_id);
             }

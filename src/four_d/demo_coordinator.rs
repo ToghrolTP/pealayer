@@ -113,7 +113,7 @@ impl DemoCoordinatorSession {
         let travel_ms = crate::platform::interop::get_live_config().virtual_seat_travel_ms.clamp(100, 60_000);
         let config = json!({
             "connection": { "virtual_seat_travel_ms": travel_ms },
-            "ui": { "peripheral_names": { "seat.a": "Left side", "seat.b": "Right side" } },
+            "ui": { "peripheral_names": { "seat.a": "Seat Left", "seat.b": "Seat Right" } },
             "integrations": {
                 "discovery": {
                     "mndp_enabled": false,
@@ -288,6 +288,7 @@ impl DemoCoordinatorSession {
         client.call("controller.board_profile.update", json!({
             "key": "demo",
             "mode": "cinema-seat-motion",
+            "expose_raw_relays": false,
             "expected_revision": revision,
         })).map_err(|error| format!("configure demo board profile: {error}"))?;
 
