@@ -1089,13 +1089,14 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     #[cfg(windows)]
     if using_composition {
         let has_native_osd = native_osd && native_card.is_some();
-        if native_osd {
-            sync_native_osd(app, ui.ctx(), native_card, dest_rect.size());
-        }
         if app.windows_video_taskbar_thumbnail
             && crate::platform::d3d11_composition::capture_taskbar(has_native_osd)
         {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
+        }
+        if native_osd {
+            // Record the current present before clearing the native card.
+            sync_native_osd(app, ui.ctx(), native_card, dest_rect.size());
         }
     }
 

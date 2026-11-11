@@ -443,9 +443,13 @@ pub fn capture_taskbar(has_app_osd: bool) -> bool {
             state.await_clean_present = present.map(|count| (count, Instant::now()));
         }
         if let Some((count, cleared_at)) = state.await_clean_present {
-            if present == Some(count) {
-                // Leave the last clean thumbnail intact. If the driver hasn't
-                // presented again within this budget, wait for a real frame.
+            let buffer_count = state.swapchain.as_ref()
+                .and_then(|swapchain| unsafe { swapchain.GetDesc().ok() })
+                .map_or(2, |desc| desc.BufferCount.max(1));
+            if !present.is_some_and(|current| current.wrapping_sub(count) >= buffer_count) {
+                // The other flip buffers may still contain earlier OSD
+                // paints. Preserve the last clean thumbnail until they
+                // rotate out. A paused picture may keep its cached bitmap.
                 return cleared_at.elapsed() < Duration::from_millis(500);
             }
             state.await_clean_present = None;
