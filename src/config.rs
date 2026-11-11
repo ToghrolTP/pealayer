@@ -1215,6 +1215,9 @@ pub struct AppConfig {
     pub native_timeline_style: NativeTimelineStyle,
     pub craft_show_close_buttons: bool,
     pub craft_show_collapse_buttons: bool,
+    pub egui_dock_show_collapse_buttons: bool,
+    pub workspace_swap_panel_colors: bool,
+    pub workspace_round_panel_tabs: bool,
     pub preferences_grouped_navigation: bool,
     pub language: AppLanguage,
     pub direction: AppDirection,
@@ -1440,6 +1443,9 @@ impl Default for AppConfig {
             native_timeline_style: NativeTimelineStyle::Standard,
             craft_show_close_buttons: true,
             craft_show_collapse_buttons: false,
+            egui_dock_show_collapse_buttons: true,
+            workspace_swap_panel_colors: false,
+            workspace_round_panel_tabs: false,
             preferences_grouped_navigation: true,
             language: AppLanguage::System,
             direction: AppDirection::Auto,
@@ -1884,6 +1890,9 @@ impl AppConfig {
         self.native_timeline_style = source.native_timeline_style;
         self.craft_show_close_buttons = source.craft_show_close_buttons;
         self.craft_show_collapse_buttons = source.craft_show_collapse_buttons;
+        self.egui_dock_show_collapse_buttons = source.egui_dock_show_collapse_buttons;
+        self.workspace_swap_panel_colors = source.workspace_swap_panel_colors;
+        self.workspace_round_panel_tabs = source.workspace_round_panel_tabs;
         self.preferences_grouped_navigation = source.preferences_grouped_navigation;
         self.app_icon_preset = source.app_icon_preset;
     }
