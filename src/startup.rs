@@ -331,8 +331,26 @@ pub fn run() -> eframe::Result {
                     ),
                 }
             }
-            let mpv = Mpv::with_initializer(|init| {
-                init.set_property("vo", "libmpv")?;
+            #[cfg(windows)]
+            let use_composition = loaded_config.windows_video_renderer.uses_composition()
+                && !cli_options.web_only
+                && crate::platform::d3d11_composition::initialize(cc.winit_window().map(Arc::as_ref));
+            #[cfg(not(windows))]
+            let use_composition = false;
+
+            let initialize_player = |composition| Mpv::with_initializer(|init| {
+                if composition {
+                    init.set_property("vo", "gpu-next")?;
+                    init.set_property("gpu-api", "d3d11")?;
+                    init.set_property("gpu-context", "d3d11")?;
+                    init.set_property("d3d11-output-mode", "composition")?;
+                    init.set_property("d3d11-composition-size", "1280x720")?;
+                    init.set_property("d3d11-flip", true)?;
+                    init.set_property("hwdec", "d3d11va")?;
+                    init.set_property("d3d11va-zero-copy", true)?;
+                } else {
+                    init.set_property("vo", "libmpv")?;
+                }
                 // Stop libmpv from blocking the UI thread during render passes.
                 // By default video-timing-offset is 0.050s, which forces mpv_render_context_render
                 // to sleep until the next frame's presentation timestamp (e.g. ~41.7ms for 23.976 fps),
@@ -380,12 +398,21 @@ pub fn run() -> eframe::Result {
                 init.set_property("sub-ass-override", "force")?;
 
                 Ok(())
-            })
-            .unwrap();
+            });
+            let (mpv, use_composition) = match initialize_player(use_composition) {
+                Ok(mpv) => (mpv, use_composition),
+                Err(error) if use_composition => {
+                    log::warn!("DirectComposition unavailable; starting OpenGL: {error}");
+                    #[cfg(windows)]
+                    crate::platform::d3d11_composition::shutdown();
+                    (initialize_player(false).expect("Could not initialize libmpv"), false)
+                }
+                Err(error) => panic!("Could not initialize libmpv: {error}"),
+            };
 
             let mpv_static: &'static Mpv = Box::leak(Box::new(mpv));
 
-            let mut render_context = mpv_static
+            let mut render_context = (!use_composition).then(|| mpv_static
                 .create_render_context(vec![
                     RenderParam::ApiType(RenderParamApiType::OpenGl),
                     RenderParam::InitParams(OpenGLInitParams {
@@ -393,13 +420,14 @@ pub fn run() -> eframe::Result {
                         ctx: get_proc,
                     }),
                 ])
-                .expect("Failed creating render context");
+                .expect("Failed creating render context"));
 
             let egui_ctx = cc.egui_ctx.clone();
             let video_update_pending = crate::mpv::render::VideoUpdateSignal::default();
             let callback_pending = video_update_pending.clone();
             crate::remote_location::install_context(&egui_ctx);
-            render_context.set_update_callback(move || {
+            if let Some(render_context) = render_context.as_mut() {
+                render_context.set_update_callback(move || {
                 // Remember decoder/configuration work even when window-move
                 // pacing defers its repaint. No MPV/GL API runs in this callback.
                 callback_pending.mark();
@@ -413,7 +441,8 @@ pub fn run() -> eframe::Result {
                 {
                     egui_ctx.request_repaint();
                 }
-            });
+                });
+            }
 
             let mut mpv_client = mpv_static.create_client(None).unwrap();
 
@@ -656,7 +685,7 @@ pub fn run() -> eframe::Result {
                 pending_external_media: None,
                 project: crate::app_projects::ProjectSession::default(),
                 pending_external_pause: false,
-                render_context: Arc::new(Mutex::new(Some(RenderContextWrapper(render_context, video_update_pending)))),
+                render_context: Arc::new(Mutex::new(render_context.map(|context| RenderContextWrapper(context, video_update_pending)))),
                 playback_time: 0.0,
                 duration: 0.0,
                 is_seekable: false,
@@ -954,6 +983,9 @@ pub fn run() -> eframe::Result {
                 windows_mica_backdrop: loaded_config.windows_mica_backdrop,
                 windows_dwm_theming: loaded_config.windows_dwm_theming,
                 windows_video_taskbar_thumbnail: loaded_config.windows_video_taskbar_thumbnail,
+                windows_video_renderer: loaded_config.windows_video_renderer,
+                #[cfg(windows)]
+                active_d3d11_composition: use_composition,
                 windows_thumbnail_toolbar: loaded_config.windows_thumbnail_toolbar,
                 windows_jump_list_quick_actions: loaded_config.windows_jump_list_quick_actions,
                 opengl_vsync: loaded_config.opengl_vsync,

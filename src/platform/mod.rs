@@ -16,6 +16,8 @@ mod mpris_session;
 mod windows_media_session;
 pub mod registry;
 pub mod taskbar_preview;
+#[cfg(windows)]
+pub(crate) mod d3d11_composition;
 #[cfg(target_os = "windows")]
 pub mod taskbar_branding;
 pub mod tray_board;

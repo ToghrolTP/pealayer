@@ -6,6 +6,24 @@ use std::sync::mpsc::{Receiver, channel};
 pub const DEFAULT_PLAYBACK_POSITION_HISTORY_LIMIT: u32 = 50;
 pub const MAX_PLAYBACK_POSITION_HISTORY_LIMIT: u32 = 500;
 
+/// Startup-selected backend for the Windows video surface.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowsVideoRenderer {
+    #[default]
+    OpenGl,
+    #[serde(rename = "d3d11")]
+    D3D11,
+}
+
+impl WindowsVideoRenderer {
+    pub const D3D11_AVAILABLE: bool = cfg!(windows);
+
+    pub fn uses_composition(self) -> bool {
+        Self::D3D11_AVAILABLE && self == Self::D3D11
+    }
+}
+
 /// Presentation only. Power/recall policy belongs to the shared coordinator.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -1334,6 +1352,7 @@ pub struct AppConfig {
     /// Supply the MPV framebuffer as the Windows taskbar preview instead of
     /// showing the complete application chrome.
     pub windows_video_taskbar_thumbnail: bool,
+    pub windows_video_renderer: WindowsVideoRenderer,
     /// Show native playback actions below the Windows taskbar preview.
     pub windows_thumbnail_toolbar: bool,
     /// Publish persistent Windows Jump List tasks for the taskbar and Start
@@ -1536,6 +1555,7 @@ impl Default for AppConfig {
             windows_mica_backdrop: false,
             windows_dwm_theming: true,
             windows_video_taskbar_thumbnail: true,
+            windows_video_renderer: WindowsVideoRenderer::default(),
             windows_thumbnail_toolbar: true,
             windows_jump_list_quick_actions: true,
             // Enable V-Sync by default to lock frame presentation to the monitor refresh rate

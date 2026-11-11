@@ -379,6 +379,71 @@ fn fitted_video_rect(rect: egui::Rect, aspect: f32) -> egui::Rect {
     egui::Rect::from_center_size(rect.center(), size)
 }
 
+#[cfg(windows)]
+pub(crate) fn composition_obscured(app: &PealayerApp, ctx: &egui::Context) -> bool {
+    egui::Popup::is_any_open(ctx) || ctx.memory(|memory| memory.top_modal_layer().is_some())
+        || app.show_error.is_some() || app.show_sub_settings || app.show_audio_settings
+        || app.show_open_url_dialog || app.show_about_dialog || app.show_shortcuts_dialog
+        || app.show_board_info_dialog || app.show_workspace_profiles_dialog
+        || app.show_hardware_channels_dialog || app.show_effect_library_editor
+        || app.show_estop_release_dialog
+}
+
+#[cfg(windows)]
+fn draw_composition(app: &PealayerApp, ui: &mut egui::Ui, dest: egui::Rect, ppi: f32) -> bool {
+    use crate::platform::{d3d11_composition as composition, taskbar_preview};
+
+    let internal_video = !crate::mpv::external::active() || crate::mpv::external::preview();
+    let media = app.current_video_path.as_ref()
+        .filter(|_| internal_video)
+        .map(|path| path.to_string_lossy()).unwrap_or_default();
+    let simple_controls = !app.show_four_d_editor && super::simple_controls::alpha(
+        ui.ctx(), app.last_mouse_activity.elapsed().as_secs_f32(), app.pin_controls, app.editing_elapsed_time,
+    ) > 0.0;
+    let covered = composition_obscured(app, ui.ctx()) || simple_controls
+        || taskbar_preview::composition_full_capture_pending()
+        || !ui.clip_rect().contains_rect(dest)
+        || ui.input(|input| !input.raw.hovered_files.is_empty())
+        || (app.is_scrubbing || app.pending_scrub_commit.is_some()) && app.active_pseudo_frame.is_some();
+    let visible = composition::update(&app.mpv_client, dest, ppi, &media, !covered);
+
+    let cache_id = ui.id().with("directcomposition-fallback");
+    if !visible && !media.is_empty() {
+        sync_native_osd(app, ui.ctx(), None, dest.size());
+        let current = ui.ctx().data(|data| data.get_temp::<(String, u64, egui::TextureHandle)>(cache_id))
+            .filter(|(source, _, _)| source == media.as_ref());
+        let size = calculate_physical_bounds(dest, ppi);
+        let frame = composition::fallback_image(
+            (size.0.max(1) as u32, size.1.max(1) as u32), current.as_ref().map(|(_, rev, _)| *rev),
+        );
+        let texture = if let Some((revision, frame)) = frame {
+            let texture = match current {
+                Some((_, _, mut texture)) => {
+                    texture.set(frame, egui::TextureOptions::LINEAR);
+                    texture
+                }
+                None => ui.ctx().load_texture("directcomposition-fallback", frame, egui::TextureOptions::LINEAR),
+            };
+            ui.ctx().data_mut(|data| data.insert_temp(cache_id, (media.into_owned(), revision, texture.clone())));
+            Some(texture)
+        } else {
+            current.map(|(_, _, texture)| texture)
+        };
+        if let Some(texture) = texture {
+            ui.painter().image(texture.id(), dest, egui::Rect::from_min_max(
+                egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+            super::simple_controls::publish_video(ui.ctx(), Some((texture.id(), dest)));
+        }
+        let retry = if app.is_paused { 200 } else { 33 };
+        if !app.is_paused || !composition::has_swapchain() && !app.video_tracks.is_empty() {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(retry));
+        }
+    } else {
+        ui.ctx().data_mut(|data| data.remove::<(String, u64, egui::TextureHandle)>(cache_id));
+    }
+    visible
+}
+
 pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     super::simple_controls::publish_video(ui.ctx(),None);
     let video_size = ui.available_size();
@@ -845,6 +910,14 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let ppi = pixels_per_point;
     let (target_phys_w, target_phys_h) = monitor_render_bounds(dest_rect, ppi, preview.resolution);
 
+    #[cfg(windows)]
+    let (using_composition, native_osd) = (
+        app.active_d3d11_composition,
+        app.active_d3d11_composition && draw_composition(app, ui, dest_rect, ppi),
+    );
+    #[cfg(not(windows))]
+    let using_composition = false;
+
     // Execute the renderer before sampling the shared texture, not one UI paint
     // later. Filling this slot below keeps both the image and OSD above it.
     let video_callback_slot = ui.painter().add(egui::Shape::Noop);
@@ -911,7 +984,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         false
     };
 
-    if !pseudo_rendered && let Some(texture_id) = texture_id_opt {
+    if !using_composition && !pseudo_rendered && let Some(texture_id) = texture_id_opt {
         if app.current_video_path.is_some() && app.rtt_state.try_lock().is_ok_and(|rtt|rtt.has_rendered_frame) {
             super::simple_controls::publish_video(ui.ctx(),Some((texture_id,dest_rect)));
         }
@@ -924,6 +997,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     }
 
     // 2.5 Draw OSD overlay if active
+    #[cfg(windows)]
+    let mut native_card = None;
     if let Some((msg, timestamp)) = &app.osd_message {
         let elapsed = timestamp.elapsed().as_secs_f32();
         let options = app.osd_display_options.as_ref();
@@ -982,9 +1057,21 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             let corner_radius = options
                 .and_then(|options| options.corner_radius)
                 .unwrap_or(8.0);
-            ui.painter().rect_filled(rect, corner_radius, bg_color);
-            ui.painter()
-                .galley(rect.min + padding, galley, egui::Color32::PLACEHOLDER);
+            #[cfg(windows)]
+            if native_osd {
+                let relative = rect.translate(-dest_rect.min.to_vec2());
+                native_card = Some(osd_ass_card(
+                    relative, padding, corner_radius, font_size, text_color, bg_color, icon, msg, "Segoe UI",
+                ));
+            }
+            #[cfg(windows)]
+            let draw_egui_osd = !native_osd;
+            #[cfg(not(windows))]
+            let draw_egui_osd = true;
+            if draw_egui_osd {
+                ui.painter().rect_filled(rect, corner_radius, bg_color);
+                ui.painter().galley(rect.min + padding, galley, egui::Color32::PLACEHOLDER);
+            }
 
             // Keep a precise expiry without forcing the entire application to
             // render at 60 Hz while the message is static. During the short
@@ -996,6 +1083,20 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 std::time::Duration::from_millis(100)
             };
             ui.ctx().request_repaint_after(repaint_after);
+        }
+    }
+
+    #[cfg(windows)]
+    if using_composition {
+        let has_native_osd = native_osd && native_card.is_some();
+        if app.windows_video_taskbar_thumbnail
+            && crate::platform::d3d11_composition::capture_taskbar(has_native_osd)
+        {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
+        }
+        if native_osd {
+            // Record the current present before clearing the native card.
+            sync_native_osd(app, ui.ctx(), native_card, dest_rect.size());
         }
     }
 
@@ -1134,7 +1235,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     };
 
     if !crate::mpv::external::active() || crate::mpv::external::preview() {
-        ui.painter().set(video_callback_slot, callback);
+        if !using_composition {
+            ui.painter().set(video_callback_slot, callback);
+        }
     } else {
         let status = crate::mpv::external::status();
         let (tone, message) = external_mpv_notice(&status);
@@ -1171,6 +1274,98 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             egui::Color32::PLACEHOLDER,
         );
     }
+}
+
+#[cfg(windows)]
+pub(crate) fn sync_native_osd(
+    app: &PealayerApp,
+    ctx: &egui::Context,
+    data: Option<String>,
+    size: egui::Vec2,
+) {
+    // Keep static messages cheap; only geometry, content or the fade changes
+    // cause an overlay write. Include resolution so resizing never stretches
+    // a cached card. Retry failures instead of caching an unrendered message.
+    let key = egui::Id::unique("native_video_osd_card");
+    let value = (data, size.x.round() as u32, size.y.round() as u32,
+        app.osd_message.as_ref().map(|(_, timestamp)| *timestamp));
+    let unchanged = ctx.data(|d| d.get_temp::<(Option<String>, u32, u32, Option<std::time::Instant>)>(key))
+        .as_ref() == Some(&value);
+    if unchanged { return; }
+    if value.0.is_none() && ctx.data(|data| {
+        data.get_temp::<(Option<String>, u32, u32, Option<std::time::Instant>)>(key)
+            .is_none_or(|entry| entry.0.is_none())
+    }) { return; }
+    let width = value.1.max(1).to_string();
+    let height = value.2.max(1).to_string();
+    let result = match value.0.as_deref() {
+        Some(data) => app.mpv_client.command(
+            "osd-overlay", &["7302", "ass-events", data, &width, &height, "20"],
+        ),
+        None => app.mpv_client.command("osd-overlay", &["7302", "none", ""]),
+    };
+    if result.is_ok() { ctx.data_mut(|d| d.insert_temp(key, value)); }
+}
+
+#[cfg(windows)]
+fn osd_ass_color(color: egui::Color32) -> String {
+    let [r, g, b, a] = color.to_srgba_unmultiplied();
+    format!("\\1c&H{b:02X}{g:02X}{r:02X}&\\1a&H{:02X}&", 255 - a)
+}
+
+#[cfg(windows)]
+fn osd_ass_literal(text: &str) -> String {
+    // Prevent external OSD text from injecting ASS tags. The invisible word
+    // joiner after a backslash also stops literal Windows paths becoming \N.
+    text.replace('\\', "\\\u{2060}")
+        .replace('{', "\\{")
+        .replace('}', "\\}")
+        .replace('\r', "")
+        .replace('\n', "\\N")
+}
+
+#[cfg(windows)]
+fn osd_ass_card(
+    rect: egui::Rect,
+    padding: egui::Vec2,
+    radius: f32,
+    font_size: f32,
+    foreground: egui::Color32,
+    background: egui::Color32,
+    icon: Option<&str>,
+    message: &str,
+    font_family: &str,
+) -> String {
+    use std::fmt::Write;
+    let radius = radius.clamp(0.0, rect.width().min(rect.height()) * 0.5);
+    let mut path = String::new();
+    // Rounded corners in the shared logical-pixel coordinate system.
+    for (corner, center) in [
+        egui::pos2(rect.right() - radius, rect.top() + radius),
+        egui::pos2(rect.right() - radius, rect.bottom() - radius),
+        egui::pos2(rect.left() + radius, rect.bottom() - radius),
+        egui::pos2(rect.left() + radius, rect.top() + radius),
+    ].into_iter().enumerate() {
+        for step in 0..=8 {
+            let angle = (-90.0 + corner as f32 * 90.0 + step as f32 * 11.25).to_radians();
+            let point = center + egui::vec2(angle.cos(), angle.sin()) * radius;
+            let command = if corner == 0 && step == 0 { "m" } else { "l" };
+            let _ = write!(path, "{command} {:.2} {:.2} ", point.x, point.y);
+        }
+    }
+    let position = rect.min + padding;
+    let text = if let Some(icon) = icon {
+        format!("{{\\fnPhosphor}}{icon}{{\\fn{font_family}}}  {}", osd_ass_literal(message))
+    } else {
+        osd_ass_literal(message)
+    };
+    // Explicit settings prevent inherited mpv OSD borders, shadow, bold,
+    // scaling or subtitle style from changing this card's appearance.
+    format!(
+        "{{\\an7\\pos(0,0)\\bord0\\shad0{}\\p1}}{path}\n\
+         {{\\an7\\pos({:.2},{:.2})\\q2\\fn{font_family}\\fs{font_size:.2}\\b0\\i0\\fscx100\\fscy100\\bord0\\shad0{}}}{text}",
+        osd_ass_color(background), position.x, position.y, osd_ass_color(foreground),
+    )
 }
 
 fn parse_osd_color(value: &str) -> Option<egui::Color32> {
