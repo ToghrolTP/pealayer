@@ -405,8 +405,7 @@ jobs:
           } > release-assets/RELEASE-NOTES.md
           (
             cd release-assets
-            find . -maxdepth 1 -type f ! -name SHA256SUMS.txt ! -name SHA256SUMS.tmp -print0 | sort -z | xargs -0 sha256sum | sed 's#  \./#  #' > SHA256SUMS.tmp
-            mv SHA256SUMS.tmp SHA256SUMS.txt
+            sha256sum -- "${archives[@]}" RELEASE-NOTES.md release-manifest.json > SHA256SUMS.txt
             sha256sum --check SHA256SUMS.txt
           )
       - name: "🛡️ Attest release provenance"
