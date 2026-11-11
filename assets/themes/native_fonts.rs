@@ -362,4 +362,3 @@ pub fn install(
     );
     ctx.set_fonts(fonts);
 }
-
