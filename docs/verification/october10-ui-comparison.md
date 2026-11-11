@@ -74,6 +74,19 @@ the top corners and keeps the selected tab connected to the body. The CraftUI
 and egui Dock collapse chevrons have separate checkboxes. CraftUI starts with
 them hidden and egui Dock starts with them shown. The settings preview as the
 user edits them and save through the normal Preferences flow.
+
+The Windows comparison below uses build `99db8840`, Studio Dark, and the same
+viewport in both modes. The advanced captures show swapped colors, rounded tabs,
+CraftUI chevrons on and egui Dock chevrons off. The native Preferences checkbox
+changed the running palette before the saved profile changed. The focused test
+runs passed 10 CraftUI, 15 egui Dock and one Preferences contract test.
+
+| Renderer | Default | Advanced tweaks |
+| --- | --- | --- |
+| CraftUI | ![Default CraftUI](../screenshots/workspace-header-tweaks/craft-default.png) | ![CraftUI with rounded tabs and chevrons](../screenshots/workspace-header-tweaks/craft-tweaks.png) |
+| egui Dock | ![Default egui Dock](../screenshots/workspace-header-tweaks/dock-default.png) | ![egui Dock with rounded tabs and hidden chevrons](../screenshots/workspace-header-tweaks/dock-tweaks.png) |
+
+[Advanced tweaks in native Preferences](../screenshots/workspace-header-tweaks/preferences.png)
 | Window placement | The comparison windows required explicit maximization for equal-size capture; a parent returned to normal bounds after the Preferences walkthrough. | Observed behavior only, not a proven root cause or a fix. Check helper/main geometry ownership separately before changing production code. |
 
 ## Preserved installation and safe launch
