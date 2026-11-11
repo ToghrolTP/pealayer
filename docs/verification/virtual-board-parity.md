@@ -7,7 +7,8 @@ The local bundle starts them on private loopback ports, with physical device
 mappings and network discovery disabled.
 
 Use the board owner’s paired coordinator and Virtual Board builds from
-[PCController #764](https://github.com/atomicdeploy/PCController/pull/764).
+[PCController #764](https://github.com/atomicdeploy/PCController/pull/764)
+and the [LCD follow-up](https://github.com/atomicdeploy/PCController/pull/765).
 For a Windows package, give `scripts/package-windows.ps1` a
 `-VirtualBoardBundleDirectory` containing both `controller.exe` and
 `virtual_board.exe`. The package manifest records their hashes. The two files
@@ -44,6 +45,8 @@ matching seven-segment masks `3F BF 3F 4F` in firmware and Pealayer. The same
 coordinator acknowledged playback advancing and pausing.
 
 The fixture used a Virtual Board with no physical peripheral mappings.
+The LCD fixture pushed both 16-character rows from the firmware at I²C address
+`0x27`, then pushed the timed clear without a client display read.
 Read-only PCController catalog queries against the physical cinema profile
 confirmed `seat.a` as Seat Left and `seat.b` as Seat Right, with raw seat
 relays hidden. The private Virtual Board uses those same defaults.

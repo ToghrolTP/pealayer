@@ -54,7 +54,9 @@ fn draw_front_panel(app: &mut PealayerApp, ui: &mut egui::Ui, caps: &HardwareCap
             .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(22, 60, 28)))
             .corner_radius(5.0)
             .inner_margin(egui::Margin::symmetric(8, 5));
+        let width = (ui.available_width() - frame.total_margin().sum().x).max(1.0);
         frame.show(ui, |ui| {
+            ui.set_width(width);
             for line in [&panel.lcd_line_1, &panel.lcd_line_2] {
                 let text: String = line.chars().take(16).collect();
                 ui.add(
