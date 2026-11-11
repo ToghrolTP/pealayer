@@ -66,3 +66,16 @@ this pass fixes clipping without prematurely replacing that editing font.
   installation has not been silently changed to disable all clicks instead.
 - Cafe deployment remains explicitly user-deferred/offline. Existing review and
   historical applications, private media and hardware outputs remain preserved.
+
+## Compact elapsed editing
+
+The Windows comparison used the same 12-second synthetic clip at `03.125` in
+builds `99db8840` and `0aecc948`. The elapsed text now keeps the same format
+on focus, and the duration reads `12.000`. Typing into the selected seconds
+group and pressing Enter settled playback at exactly `07.125`. The focused
+Windows runs passed 30 transport controls and 12 Program Monitor tests.
+
+| Build | Display | Editing |
+| --- | --- | --- |
+| Before | ![Previous displayed timestamps](../screenshots/compact-timecode/before-display.png) | ![Previous elapsed editor restored leading groups](../screenshots/compact-timecode/before-edit.png) |
+| After | ![Compact elapsed and duration](../screenshots/compact-timecode/after-display.png) | ![Compact elapsed editor](../screenshots/compact-timecode/after-edit.png) |
