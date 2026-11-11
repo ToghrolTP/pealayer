@@ -1059,6 +1059,24 @@ pub fn transport_context_menu(app: &mut PealayerApp, ui: &mut egui::Ui) {
     }
 }
 
+pub(super) fn apply_seekbar_input(
+    app: &mut PealayerApp,
+    ui: &egui::Ui,
+    response: &egui::Response,
+    position: f64,
+) {
+    let pointer_released = !ui.input(|i| i.pointer.primary_down());
+    if response.drag_stopped()
+        || response.clicked()
+        || (pointer_released && (app.is_scrubbing || response.changed()))
+    {
+        app.finish_scrub(position);
+    } else if response.changed() {
+        app.scrub_to(position);
+        ui.ctx().request_repaint();
+    }
+}
+
 pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     let controls_label = app.tr("Controls");
@@ -1200,20 +1218,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             show_seek_preview,
                             "simple-seekbar-preview",
                         );
-                        // `changed` covers both dragging and a single click on
-                        // the seekbar. Restricting this to `dragged` left click
-                        // seeks without a preview request on some egui input
-                        // paths, so the thumb and decoded frame disagreed.
-                        if can_seek && response.changed() {
-                            app.scrub_to(current_pos);
-                            ui.ctx().request_repaint();
-                        }
-                        if can_seek
-                            && (response.drag_stopped()
-                                || response.clicked()
-                                || (app.is_scrubbing && !ui.input(|i| i.pointer.primary_down())))
-                        {
-                            app.finish_scrub(current_pos);
+                        if can_seek {
+                            apply_seekbar_input(app, ui, &response, current_pos);
                         }
                     },
                     |ui| {

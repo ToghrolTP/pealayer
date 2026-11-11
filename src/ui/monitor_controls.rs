@@ -372,16 +372,8 @@ fn draw_seekbar(app: &mut PealayerApp, ui: &mut egui::Ui, filmcraft: bool) -> eg
     let show_seek_preview = app.nle_seekbar_hover_thumbnails;
     crate::ui::seek_preview::draw(app, ui, &response, show_seek_preview, "nle-seekbar-preview");
 
-    if can_seek && response.changed() {
-        app.scrub_to(current_pos);
-        ui.ctx().request_repaint();
-    }
-    if can_seek
-        && (response.drag_stopped()
-            || response.clicked()
-            || (app.is_scrubbing && !ui.input(|i| i.pointer.primary_down())))
-    {
-        app.finish_scrub(current_pos);
+    if can_seek {
+        crate::ui::controls::apply_seekbar_input(app, ui, &response, current_pos);
     }
     response
 }
