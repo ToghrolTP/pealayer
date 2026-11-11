@@ -970,7 +970,7 @@ pub fn command_catalog() -> Value {
             "start_addressable_strip_effect", "stop_addressable_strip",
             "refresh_addressable_strip_status", "clear_addressable_strip",
             "hardware.strip.color_order", "controller_effect.restore_examples", "controller_effect.strip.edit",
-            "press_front_panel_key", "set_virtual_seat_travel", "board_information", "rf_control", "open_rf_manager"
+            "press_front_panel_key", "board_information", "rf_control", "open_rf_manager"
         ],
         "json_rpc_prefix": "pealayer",
         "hardware_connection": {"method":"pealayer.hardware.connection","command":"set_hardware_connection","params":{"connected":"required boolean"},"scope":"current session authority; existing configured endpoint"},
@@ -997,6 +997,12 @@ pub fn command_catalog() -> Value {
     catalog["branding"]["clear"] = serde_json::json!("pealayer.branding.clear");
     catalog["commands"].as_array_mut().unwrap().push(serde_json::json!("clear_branding"));
     catalog["commands"].as_array_mut().unwrap().push(serde_json::json!("open_download_center"));
+    catalog["commands"].as_array_mut().unwrap().push(serde_json::json!("set_virtual_seat_travel"));
+    catalog["virtual_seat_travel"] = serde_json::json!({
+        "method":"pealayer.hardware.virtual_seat_travel.set", "command":"set_virtual_seat_travel",
+        "scope":"local Virtual Board", "range_ms":[100,60000],
+        "feedback":"hardware_details.virtual_seats.full_travel_ms"
+    });
     catalog["updates"] = serde_json::json!({"http":"/api/update/", "methods":crate::update::rpc::METHODS,
         "scope":"local process, never implicitly relayed to authority", "chunk_bytes":crate::update::rpc::CHUNK_BYTES,
         "encoding":"base64", "completion":"exact artifact and health acknowledgement, not transfer acceptance"});
