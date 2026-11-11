@@ -1742,12 +1742,20 @@ mod tests {
 
     #[test]
     fn video_renderer_is_scheduled_before_image_and_osd() {
-        // CPU-only paint-order guard; no player, decoder, GPU or board worker.
-        let source = include_str!("video.rs").split("#[cfg(test)]").next().unwrap();
+        // Check the main draw path. The separate DirectComposition renderer
+        // paints its own texture without the OpenGL callback slot.
+        let source = include_str!("video.rs")
+            .split_once("pub fn draw(app:")
+            .unwrap()
+            .1
+            .split_once("#[cfg(test)]")
+            .unwrap()
+            .0;
         let slot = source.find("let video_callback_slot = ui.painter().add(egui::Shape::Noop)").unwrap();
-        let image = source.find("ui.painter().image(").unwrap();
         let osd = source.find("// 2.5 Draw OSD overlay").unwrap();
-        assert!(slot < image && image < osd);
+        let mut images = source.match_indices("ui.painter().image(").map(|(index, _)| index);
+        assert!(images.next().is_some_and(|image| slot < image && image < osd));
+        assert!(images.all(|image| slot < image && image < osd));
         assert!(source.contains("ui.painter().set(video_callback_slot, callback)"));
         assert!(!source.contains("ui.painter().add(callback)"));
     }
