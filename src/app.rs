@@ -657,6 +657,7 @@ pub struct PealayerApp {
     pub is_paused: bool,
     pub is_eof: bool,
     pub(crate) volume: f64,
+    pub(crate) volume_boost: bool,
     pub(crate) is_muted: bool,
     pub(crate) playback_rate: f64,
     pub(crate) configured_playback_speed: f64,
@@ -1643,6 +1644,7 @@ impl eframe::App for PealayerApp {
                 asset_imports: crate::assets::snapshot(),
                 pending_timeline_change: self.pending_timeline_close_action.is_some(),
                 volume: self.volume,
+                volume_boost: self.volume_boost,
                 muted: self.is_muted,
                 playback_rate: self.playback_rate,
                 playback_time: self.playback_time,
@@ -2523,15 +2525,17 @@ impl PealayerApp {
         {
             self.seek_relative(self.quick_seek_seconds);
         }
-        if non_timeline_shortcuts_enabled && ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
-            let _ = self.mpv.command("add", &["volume", "5"]);
-            self.volume = (self.volume + 5.0).clamp(0.0, 130.0);
-            self.set_osd(format!("Volume: {:.0}%", self.volume));
-        }
-        if non_timeline_shortcuts_enabled && ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
-            let _ = self.mpv.command("add", &["volume", "-5"]);
-            self.volume = (self.volume - 5.0).clamp(0.0, 130.0);
-            self.set_osd(format!("Volume: {:.0}%", self.volume));
+        if non_timeline_shortcuts_enabled {
+            let change = ctx.input(|input| {
+                i32::from(input.key_pressed(egui::Key::ArrowUp))
+                    - i32::from(input.key_pressed(egui::Key::ArrowDown))
+            });
+            if change != 0 {
+                let value = (self.volume + f64::from(change) * 5.0)
+                    .clamp(0.0, crate::config::volume_limit(self.volume_boost));
+                self.apply_interop_command(ctx, crate::platform::interop::InteropCommand::SetVolume { value }, "Keyboard volume");
+                self.set_osd(format!("Volume: {value:.0}%"));
+            }
         }
 
         const MACRO_KEYS: [egui::Key; 8] = [
@@ -4496,9 +4500,7 @@ impl PealayerApp {
                     ..
                 } = request;
                 if let Some(value) = volume {
-                    let _ = self.mpv.set_property("volume", value);
-                    self.volume = value;
-                    self.save_config();
+                    self.apply_interop_command(ctx, InteropCommand::SetVolume { value }, source);
                 }
                 if let Some(target) = target {
                     if crate::media::is_remote_media_target(&target) {
@@ -4571,7 +4573,7 @@ impl PealayerApp {
                 }
             }
             InteropCommand::SetVolume { value } => {
-                let clamped = value.clamp(0.0, 130.0);
+                let clamped = value.clamp(0.0, crate::config::volume_limit(self.volume_boost));
                 let _ = self.mpv.set_property("volume", clamped);
                 self.volume = clamped;
                 self.save_config();
@@ -7719,6 +7721,7 @@ impl PealayerApp {
         // an unrelated API patch, even while the native UI still used it.
         let mut cfg = crate::platform::interop::get_live_config();
         cfg.volume = self.volume;
+        cfg.volume_boost = self.volume_boost;
         cfg.is_muted = self.is_muted;
         cfg.pin_controls = self.pin_controls;
         cfg.simple_workspace = self.simple_workspace;
@@ -8117,7 +8120,8 @@ impl PealayerApp {
         self.app_name = crate::config::resolved_app_name(&config);
         self.app_publisher = crate::config::resolved_app_publisher(&config);
         self.app_copyright = crate::config::resolved_app_copyright(&config);
-        self.volume = config.volume;
+        self.volume_boost = config.volume_boost;
+        self.volume = config.volume.min(crate::config::volume_limit(self.volume_boost));
         self.is_muted = config.is_muted;
         self.pin_controls = config.pin_controls;
         self.simple_workspace = config.simple_workspace;
@@ -8761,6 +8765,28 @@ impl PealayerApp {
             return Err("Change subtitle cue segments in the open Preferences window".into());
         }
         let updated = self.runtime_config_snapshot().apply_patch(values)?;
+        if values.as_object().is_some_and(|values| values.len() == 1 && values.contains_key("volume_boost")) {
+            if self.preference_preview_original.is_some() {
+                return Err("Finish the open Preferences edit before changing volume boost".into());
+            }
+            if !self.workspace_rendering {
+                updated.save()?;
+            }
+            if updated.volume != self.volume {
+                let _ = self.mpv.set_property("volume", updated.volume);
+                self.volume = updated.volume;
+            }
+            self.volume_boost = updated.volume_boost;
+            crate::platform::interop::set_live_config(updated);
+            if self.workspace_rendering {
+                self.deferred_config_save = true;
+            } else {
+                self.config_fingerprint =
+                    crate::config::AppConfig::fingerprint(&crate::config::AppConfig::get_config_path()).ok();
+            }
+            ctx.request_repaint();
+            return Ok(());
+        }
         updated.save()?;
         if values.as_object().is_some_and(|values|!values.is_empty() && values.keys().all(|key|key=="simple_workspace")) {
             self.simple_workspace=updated.simple_workspace;
@@ -10379,6 +10405,7 @@ impl Default for PealayerApp {
             is_paused: false,
             is_eof: false,
             volume: 100.0,
+            volume_boost: false,
             is_muted: false,
             playback_rate: 1.0,
             configured_playback_speed: 1.0,

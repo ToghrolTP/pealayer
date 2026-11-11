@@ -1270,6 +1270,8 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
             "بی‌صدا کردن موقت پخش بدون تغییر بلندی صدا"
         }
         "Adjust playback volume from 0% to 130%" => "تنظیم بلندی صدای پخش از ۰٪ تا ۱۳۰٪",
+        "Reset volume to 100%" => "بازنشانی بلندی صدا به ۱۰۰٪",
+        "Allow volume above 100%" => "اجازهٔ افزایش بلندی صدا بیش از ۱۰۰٪",
         "Audio delay" => "تأخیر صدا",
         "Use negative values when audio is heard too late" => {
             "اگر صدا دیر شنیده می‌شود، از مقدار منفی استفاده کنید"

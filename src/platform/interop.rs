@@ -1402,6 +1402,8 @@ pub struct PlayerStatusResponse {
     pub human_readable_time_units: bool,
     pub volume: f64,
     #[serde(default)]
+    pub volume_boost: bool,
+    #[serde(default)]
     pub muted: bool,
     #[serde(default = "default_playback_rate")]
     pub playback_rate: f64,
@@ -1771,6 +1773,7 @@ impl Default for PlayerStatusResponse {
             playing: false,
             human_readable_time_units: true,
             volume: 0.0,
+            volume_boost: false,
             muted: false,
             playback_rate: default_playback_rate(),
             playback_time: 0.0,

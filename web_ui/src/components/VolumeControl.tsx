@@ -30,7 +30,7 @@ export const VolumeControl = React.memo(function VolumeControl({ state, sendCmd,
       <Slider
         aria-label={tr(locale, 'Volume')}
         min={0}
-        max={130}
+        max={state.volume_boost ? 130 : 100}
         value={state.volume ?? 0}
         disabled={!state.current_video || state.volume === undefined}
         tooltip={{ formatter: (value) => `${value}%` }}
@@ -47,5 +47,6 @@ export const VolumeControl = React.memo(function VolumeControl({ state, sendCmd,
   && prev.sendCmd === next.sendCmd
   && prev.state.muted === next.state.muted
   && prev.state.volume === next.state.volume
+  && prev.state.volume_boost === next.state.volume_boost
   && prev.state.current_video === next.state.current_video
 ));

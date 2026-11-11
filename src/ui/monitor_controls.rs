@@ -67,7 +67,7 @@ impl Metrics {
         let (total, _, finite) = duration_content(app);
         let total_width = super::controls::duration_label_width(ui, &total, finite);
         let duration_gap = super::controls::duration_gap(ui);
-        let elapsed = super::controls::elapsed_editor_size(ui);
+        let elapsed = super::controls::elapsed_editor_size(app, ui);
         Self {
             transport: super::control_bar::group_width(app, ui, crate::config::ControlBarSurface::Monitor, false),
             timeline_min: elapsed.x + MIN_SEEK_WIDTH + total_width + gap + duration_gap,
@@ -514,20 +514,16 @@ mod tests {
                         .0;
                 measured.push((width, response.rect.width()));
             }
+            let mut app = PealayerApp::default();
+            app.volume = 130.0;
+            app.volume_boost = true;
             for width in [114.0, VOLUME_WIDTH] {
                 ui.allocate_ui_with_layout(
                     egui::vec2(width, 24.0),
                     egui::Layout::left_to_right(egui::Align::Center),
                     |ui| {
                         let left = ui.max_rect().left();
-                        super::super::controls::draw_volume_widgets(
-                            ui,
-                            crate::config::ColorPalette::Studio,
-                            false,
-                            130.0,
-                            "Mute",
-                            "Volume",
-                        );
+                        super::super::controls::draw_volume_strip(&mut app, ui);
                         measured.push((width, ui.min_rect().right() - left));
                     },
                 );

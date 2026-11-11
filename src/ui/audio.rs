@@ -212,18 +212,19 @@ fn draw_audio_output(app: &mut PealayerApp, ui: &mut egui::Ui) {
             ui,
             icons::SLIDERS_HORIZONTAL,
             &app.tr("Volume"),
-            Some(&app.tr("Adjust playback volume from 0% to 130%")),
+            None,
             |ui| {
                 let mut volume = app.volume;
-                let mut changed = dialog::receive_numeric_paste(ui, "volume", &mut volume, &(0.0..=130.0), "%");
+                let range = 0.0..=crate::config::volume_limit(app.volume_boost);
+                let mut changed = dialog::receive_numeric_paste(ui, "volume", &mut volume, &range, "%");
                 let response = ui.add_sized(
                     [190.0, 24.0],
-                    egui::Slider::new(&mut volume, 0.0..=130.0).suffix("%"),
+                    egui::Slider::new(&mut volume, range.clone()).suffix("%"),
                 );
                 let wheel_steps = app.numeric_input_steps.get("volume").copied()
                     .unwrap_or_else(|| crate::config::NumericInputSteps::for_step(1.0));
-                changed |= dialog::numeric_slider_wheel(ui, &response, &mut volume, 0.0..=130.0, wheel_steps);
-                changed |= dialog::numeric_context_menu(ui, &response, "volume", &mut volume, 0.0..=130.0, 1.0, crate::config::AppConfig::default().volume, "%", &mut app.numeric_input_steps, app.language, 1e-9);
+                changed |= dialog::numeric_slider_wheel(ui, &response, &mut volume, range.clone(), wheel_steps);
+                changed |= dialog::numeric_context_menu(ui, &response, "volume", &mut volume, range, 1.0, crate::config::AppConfig::default().volume, "%", &mut app.numeric_input_steps, app.language, 1e-9);
                 if response.changed() || changed {
                     app.volume = volume;
                     let _ = app.mpv.set_property("volume", volume);
