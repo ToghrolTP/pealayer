@@ -606,22 +606,13 @@ fn input_with_icon(
     hint: &str,
     width: f32,
 ) -> egui::Response {
-    let inset = ui.spacing().icon_width + 9.0;
-    let response = ui.add(
+    ui.add(
         controls::singleline_text_edit(ui, value)
             .id(id)
+            .prefix(icon(glyph).color(ui.visuals().weak_text_color()))
             .hint_text(hint)
-            .margin(egui::Margin { left: inset.round() as i8, right: 7, top: 0, bottom: 0 })
             .desired_width(width.max(1.0)),
-    );
-    ui.painter().text(
-        response.rect.left_center() + egui::vec2(inset * 0.5, 0.0),
-        egui::Align2::CENTER_CENTER,
-        glyph,
-        icon_font_id(ui, TextStyle::Button),
-        ui.visuals().weak_text_color(),
-    );
-    response
+    )
 }
 
 fn panel(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui)) {
@@ -643,13 +634,6 @@ fn accent(ui: &egui::Ui) -> Color32 {
 
 fn icon(glyph: &str) -> RichText {
     RichText::new(glyph).family(egui::FontFamily::Name("phosphor".into()))
-}
-
-fn icon_font_id(ui: &egui::Ui, style: TextStyle) -> egui::FontId {
-    egui::FontId::new(
-        style.resolve(ui.style()).size,
-        egui::FontFamily::Name("phosphor".into()),
-    )
 }
 
 fn icon_caption(
