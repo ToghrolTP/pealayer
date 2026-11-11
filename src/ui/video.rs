@@ -693,9 +693,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
         if adjust_volume && scroll.y != 0.0 {
             let vol_change = if scroll.y > 0.0 { 2.0 } else { -2.0 };
-            let new_vol = (app.volume + vol_change).clamp(0.0, 130.0);
-            let _ = app.mpv.set_property("volume", new_vol);
-            app.volume = new_vol;
+            let new_vol = (app.volume + vol_change).clamp(0.0, crate::config::volume_limit(app.volume_boost));
+            app.apply_interop_command(ui.ctx(),
+                crate::platform::interop::InteropCommand::SetVolume { value: new_vol }, "Video wheel");
             app.set_osd(format!("Volume: {:.0}%", new_vol));
         } else {
             let delta = if scroll.y != 0.0 { -scroll.y } else { scroll.x };

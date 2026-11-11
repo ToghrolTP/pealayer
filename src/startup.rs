@@ -532,7 +532,8 @@ pub fn run() -> eframe::Result {
                 }
             });
 
-            let initial_volume = cli_options.volume.unwrap_or(loaded_config.volume);
+            let initial_volume = cli_options.volume.unwrap_or(loaded_config.volume)
+                .clamp(0.0, crate::config::volume_limit(loaded_config.volume_boost));
             let startup_media_target = if crate::peer::active() { cli_options.target.clone() } else { crate::media::startup_media_target(
                 cli_options.target.as_deref(),
                 loaded_config.restore_last_media_on_startup && (loaded_config.external_mpv.mode == crate::mpv::external::Mode::Internal || matches!(loaded_config.external_mpv.mode,crate::mpv::external::Mode::External|crate::mpv::external::Mode::Dual) && loaded_config.external_mpv.endpoint.is_empty()),
@@ -701,6 +702,7 @@ pub fn run() -> eframe::Result {
                 is_paused: false,
                 is_eof: false,
                 volume: initial_volume,
+                volume_boost: loaded_config.volume_boost,
                 is_muted: loaded_config.is_muted,
                 playback_rate: loaded_config.playback_speed,
                 configured_playback_speed: loaded_config.playback_speed,

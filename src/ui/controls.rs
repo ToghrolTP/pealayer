@@ -72,59 +72,117 @@ pub(crate) fn draw_contextual_transport_button(
 }
 
 /// A bounded horizontal volume strip, shared by responsive monitor layouts.
-/// Session commands also control the authority when this app is a consumer.
 pub(crate) fn draw_volume_strip(app: &mut PealayerApp, ui: &mut egui::Ui) {
-    let (toggle_mute, volume_update) = draw_volume_widgets(
-        ui, app.color_palette, app.is_muted, app.volume,
-        &app.tr(if app.is_muted { "Unmute" } else { "Mute" }), &app.tr("Volume"));
-    if toggle_mute {
-        app.apply_interop_command(&ui.ctx().clone(), crate::platform::interop::InteropCommand::ToggleMute,
-            "Volume control");
+    let icon = if app.is_muted { crate::ui::icons::SPEAKER_SLASH } else { crate::ui::icons::SPEAKER_HIGH };
+    let button = transport_button(app.color_palette, ui, icon, if app.is_muted { "amber" } else { "muted" });
+    let button = ui.add_sized([30.0, 22.0], button)
+        .on_hover_text(app.tr(if app.is_muted { "Unmute" } else { "Mute" }));
+    if button.clicked() {
+        app.apply_interop_command(ui.ctx(), crate::platform::interop::InteropCommand::ToggleMute, "Volume control");
     }
-    if let Some(volume) = volume_update {
-        app.apply_interop_command(&ui.ctx().clone(), crate::platform::interop::InteropCommand::SetVolume { value: volume },
-            "Volume control");
-    }
+    draw_volume_slider(app, ui);
 }
 
 /// The customizable bar owns Mute; keep its slider and percentage independent.
 pub(crate) fn draw_volume_slider(app: &mut PealayerApp, ui: &mut egui::Ui) {
-    if let Some(value) = volume_slider_widgets(ui, app.volume, &app.tr("Volume"), app.native_monitor_style == crate::config::NativeMonitorStyle::FilmCraft) {
-        app.apply_interop_command(ui.ctx(), crate::platform::interop::InteropCommand::SetVolume { value },
-            "Volume control");
+    use crate::platform::interop::InteropCommand;
+
+    let filmcraft = if app.show_four_d_editor { app.native_monitor_style } else { app.native_transport_style }
+        == crate::config::NativeMonitorStyle::FilmCraft;
+    let (changed, response) = volume_slider_widgets(ui, app.volume, app.volume_boost, &app.tr("Volume"), filmcraft);
+    if let Some(value) = changed {
+        app.apply_interop_command(ui.ctx(), InteropCommand::SetVolume { value }, "Volume control");
     }
+    response.context_menu(|ui| {
+        if let Some(command) = volume_context_menu(ui, app.is_muted, app.volume_boost, app.language) {
+            app.apply_interop_command(ui.ctx(), command, "Volume menu");
+        }
+    });
 }
 
-pub(super) fn draw_volume_widgets(ui: &mut egui::Ui, palette: crate::config::ColorPalette,
-    muted: bool, volume: f64, mute_tooltip: &str, volume_label: &str) -> (bool, Option<f64>) {
-    let icon = if muted { crate::ui::icons::SPEAKER_SLASH } else { crate::ui::icons::SPEAKER_HIGH };
-    let toggle_mute = ui.add_sized([30.0, 22.0], transport_button(palette, ui, icon,
-        if muted { "amber" } else { "muted" })).on_hover_text(mute_tooltip).clicked();
-    (toggle_mute, volume_slider_widgets(ui, volume, volume_label, false))
+fn volume_context_menu(
+    ui: &mut egui::Ui,
+    muted: bool,
+    boost: bool,
+    language: crate::config::AppLanguage,
+) -> Option<crate::platform::interop::InteropCommand> {
+    use crate::platform::interop::InteropCommand;
+    use crate::ui::icons;
+    let tr = |label| super::i18n::tr(language, label);
+    let (mute_icon, mute_label) = if muted { (icons::SPEAKER_HIGH, "Unmute") } else { (icons::SPEAKER_SLASH, "Mute") };
+    let reset = ui.button(format!("{} {}", icons::ARROW_COUNTER_CLOCKWISE, tr("Reset volume to 100%"))).clicked();
+    let toggle = ui.button(format!("{mute_icon} {}", tr(mute_label))).clicked();
+    ui.separator();
+    let mut allow_boost = boost;
+    let boost_changed = ui.checkbox(&mut allow_boost, tr("Allow volume above 100%")).changed();
+    let command = if reset {
+        InteropCommand::SetVolume { value: crate::config::NORMAL_VOLUME_LIMIT }
+    } else if toggle {
+        InteropCommand::SetMute { muted: !muted }
+    } else if boost_changed {
+        InteropCommand::UpdateConfig { values: serde_json::json!({"volume_boost":allow_boost}) }
+    } else {
+        return None;
+    };
+    ui.close();
+    Some(command)
 }
 
-fn volume_slider_widgets(ui: &mut egui::Ui, mut volume: f64, volume_label: &str, filmcraft: bool) -> Option<f64> {
+fn volume_slider_widgets(
+    ui: &mut egui::Ui,
+    volume: f64,
+    boost: bool,
+    volume_label: &str,
+    filmcraft: bool,
+) -> (Option<f64>, egui::Response) {
+    let limit = crate::config::volume_limit(boost);
+    let initial = volume.min(limit);
+    let mut value = initial;
     let old_width = ui.spacing().slider_width;
-    // Reserve a stable percentage column, even when the value has fewer digits.
-    ui.spacing_mut().slider_width = (ui.available_width() - 44.0 - 2.0 * ui.spacing().item_spacing.x).max(1.0);
-    let response = ui.scope(|ui| {
-        if filmcraft { ui.set_opacity(0.0); }
-        ui.add(egui::Slider::new(&mut volume, 0.0..=130.0).show_value(false))
-    }).inner.on_hover_text(format!("{volume_label}: {volume:.0}%"));
-    if filmcraft { super::craft_theme::paint_monitor_volume(ui,&response,(volume/130.0) as f32); }
+    let exact_width = ui.painter().layout_no_wrap(
+        "100%".into(), egui::TextStyle::Button.resolve(ui.style()), egui::Color32::PLACEHOLDER,
+    ).size().x + 2.0 * ui.spacing().button_padding.x;
+    ui.spacing_mut().slider_width = (ui.available_width() - exact_width - ui.spacing().item_spacing.x).max(1.0);
+
+    // egui's slider tracks every pointer button with a drag-only sense.
+    // Register clicks on that same widget and keep secondary gestures read-only.
+    let secondary = ui.input(|input| {
+        input.pointer.secondary_down() || input.pointer.button_released(egui::PointerButton::Secondary)
+    });
+    let custom_rail = filmcraft || boost;
+    let slider = ui.scope(|ui| {
+        if custom_rail { ui.set_opacity(0.0); }
+        ui.add(egui::Slider::from_get_set(0.0..=limit, |next| {
+            if let Some(next) = next.filter(|_| !secondary) {
+                value = next;
+            }
+            value
+        }).integer().handle_shape(egui::style::HandleShape::Circle).show_value(false))
+            .interact(egui::Sense::click())
+    }).inner;
     ui.spacing_mut().slider_width = old_width;
-    let wheel = if response.hovered() {
+    let wheel = if slider.hovered() && !secondary {
         ui.input(|input| input.smooth_scroll_delta.y)
     } else { 0.0 };
     if wheel != 0.0 {
-        volume = (volume + f64::from(wheel.signum()) * 2.0).clamp(0.0, 130.0);
+        value = (value + f64::from(wheel.signum()) * 2.0).clamp(0.0, limit);
         ui.input_mut(|input| input.smooth_scroll_delta.y = 0.0);
     }
-    let value = ui.add_sized([44.0, super::control_density::height(ui)],
-        egui::DragValue::new(&mut volume).range(0.0..=130.0).speed(1.0)
-            .max_decimals(0).suffix("%").update_while_editing(false))
-        .on_hover_text(format!("{volume_label} · Click to type a percentage"));
-    (response.changed() || value.changed() || wheel != 0.0).then_some(volume)
+    let before_input = value;
+    let input = ui.add_sized([exact_width, super::control_density::height(ui)],
+        egui::DragValue::new(&mut value).range(0.0..=limit).speed(1.0)
+            .max_decimals(0).suffix("%").update_while_editing(false));
+    if secondary {
+        value = before_input;
+    }
+    if custom_rail {
+        super::craft_theme::paint_monitor_volume(ui, &slider, (value / limit) as f32,
+            boost.then_some((crate::config::NORMAL_VOLUME_LIMIT / limit) as f32));
+    }
+    let changed = value != initial;
+    let slider = slider.on_hover_text(format!("{volume_label}: {value:.0}%"));
+    let input = input.on_hover_text(format!("{volume_label} · Click to type a percentage"));
+    (changed.then_some(value), slider.union(input))
 }
 
 fn transport_time_font(ui: &egui::Ui) -> egui::FontId {
@@ -693,7 +751,7 @@ pub fn draw_elapsed_editor(
 ) -> egui::Response {
     let elapsed = resolve_display_time(app.seek_pos, app.playback_time);
     let rendered = format_transport_time(elapsed, app.duration, app.show_subseconds);
-    let size = elapsed_editor_size(ui);
+    let size = elapsed_editor_size(app, ui);
     let desired_width = size.x;
     let edit_id = ui.make_persistent_id(id_source);
     let owner_key = egui::Id::new("elapsed-editor-owner");
@@ -792,6 +850,7 @@ pub fn draw_elapsed_editor(
         .layouter(&mut layouter)
         .horizontal_align(egui::Align::Center)
         .vertical_align(egui::Align::Center)
+        .desired_width(desired_width - 8.0)
         .margin(egui::Margin::symmetric(4, 2))
         .min_size(egui::Vec2::ZERO)
         .interactive(editing)
@@ -1199,9 +1258,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         true,
                     ),
                 };
-                let mut volume = app.volume;
                 let mut toggle_total_mode = false;
-                let mut volume_update = None;
 
                 // Sides borrows both callbacks together, but invokes them
                 // sequentially. Each callback owns a short exclusive app borrow.
@@ -1263,39 +1320,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         super::control_bar::draw_group(app, ui, crate::config::ControlBarSurface::Simple, true, control_owner);
 
                         ui.add_enabled_ui(has_video, |ui| {
-                            let volume_slider =
-                                egui::Slider::new(&mut volume, 0.0..=130.0).show_value(false);
-                            let volume_response = ui.add_sized([80.0, 15.0], volume_slider);
-                            if volume_response.changed() {
-                                volume_update = Some(volume);
-                            }
-                            if volume_response.hovered() {
-                                let scroll = ui.input(|input| {
-                                    let mut delta = input.smooth_scroll_delta;
-                                    if delta.x == 0.0 && delta.y == 0.0 {
-                                        for event in &input.events {
-                                            if let egui::Event::MouseWheel {
-                                                delta: wheel_delta,
-                                                ..
-                                            } = event
-                                            {
-                                                delta += *wheel_delta;
-                                            }
-                                        }
-                                    }
-                                    delta
-                                });
-                                if scroll.y != 0.0 {
-                                    volume_update = Some(
-                                        (volume + if scroll.y > 0.0 { 2.0 } else { -2.0 })
-                                            .clamp(0.0, 130.0),
-                                    );
-                                }
-                            }
-                            let exact = ui.add(egui::DragValue::new(&mut volume).range(0.0..=130.0)
-                                .max_decimals(0).suffix("%").update_while_editing(false))
-                                .on_hover_text(app.tr("Click to type a volume percentage"));
-                            if exact.changed() { volume_update = Some(volume); }
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(128.0, super::control_density::height(ui)),
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| draw_volume_slider(app, ui),
+                            );
                         });
 
                         let total_response = draw_duration_label(
@@ -1306,9 +1335,6 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 );
                 drop(app_cell);
 
-                if let Some(new_volume) = volume_update {
-                    app.apply_interop_command(&ctx,crate::platform::interop::InteropCommand::SetVolume {value:new_volume},"Simple volume control");
-                }
                 if toggle_total_mode {
                     app.show_remaining_time = !app.show_remaining_time;
                     app.save_config();
@@ -1377,12 +1403,16 @@ pub fn resolve_display_time(seek_pos: Option<f64>, playback_time: f64) -> f64 {
     seek_pos.unwrap_or(playback_time)
 }
 
-pub(super) fn elapsed_editor_size(ui: &egui::Ui) -> egui::Vec2 {
+pub(super) fn elapsed_editor_size(app: &PealayerApp, ui: &egui::Ui) -> egui::Vec2 {
     let font = transport_time_font(ui);
-    let sample = transport_time_galley(ui, "00:00:00.000");
+    let seconds = resolve_display_time(app.seek_pos, app.playback_time);
+    let visible = format_transport_time(seconds, app.duration, app.show_subseconds);
+    let mut width = transport_time_galley(ui, &visible).size().x;
+    if app.editing_elapsed_time {
+        width = width.max(transport_time_galley(ui, &app.elapsed_time_input).size().x);
+    }
     let height = ui.fonts_mut(|fonts| fonts.row_height(&font));
-    egui::vec2(sample.size().x + 12.0,
-        (height + 6.0).max(super::control_density::height(ui)))
+    egui::vec2(width + 10.0, (height + 6.0).max(super::control_density::height(ui)))
 }
 
 pub(super) fn format_transport_time(seconds: f64, duration: f64, subseconds: bool) -> String {
@@ -1770,18 +1800,26 @@ mod tests {
     fn elapsed_ink_fits_its_row_in_display_and_edit_modes_at_large_fonts() {
         let _guard = crate::app::tests::lock_app_tests();
         for scale in [1.0,1.25,1.5,2.0] { for size in [14.0,20.0,28.0] { for editing in [false,true] {
+            for (duration, time, subseconds) in [(10.0, 3.883, true), (120.0, 63.125, false), (7200.0, 6300.125, true)] {
             let ctx = egui::Context::default(); ctx.set_pixels_per_point(scale);
             ctx.style_mut_of(ctx.theme(),|style| {style.text_styles.insert(egui::TextStyle::Body,egui::FontId::proportional(size));});
-            let mut app = PealayerApp::default(); app.duration = 120.0; app.playback_time = 63.125;
+            let mut app = PealayerApp::default();
+            app.duration = duration;
+            app.playback_time = time;
+            app.show_subseconds = subseconds;
+            let visible = format_transport_time(time, duration, subseconds);
             if editing { begin_elapsed_edit(&mut app); }
             for _ in 0..2 {
                 let mut output = ctx.run_ui(Default::default(),|ui| {
-                    let size = elapsed_editor_size(ui);
+                    let size = elapsed_editor_size(&app, ui);
                     let (rect,_) = ui.allocate_exact_size(size,egui::Sense::hover());
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
                     child.set_clip_rect(rect);
                     let response=draw_elapsed_editor(&mut app,&mut child,"elapsed-fit-fixture",true);
-                    assert!(rect.expand(0.1).contains_rect(response.rect),"editor grew outside measured row: {rect:?} {:?}",response.rect);
+                    assert!(rect.expand(0.5).contains_rect(response.rect),"editor grew outside measured row: {rect:?} {:?}",response.rect);
+                    let text_width = transport_time_galley(ui, &visible).size().x;
+                    let inset = response.rect.width() - text_width;
+                    assert!((6.0..=12.0).contains(&inset), "time {visible} has unexpected field padding {inset}: {:?}", response.rect);
                 });
                 for shape in &output.shapes { if let egui::Shape::Text(text)=&shape.shape {
                     let ink=text.galley.mesh_bounds.translate(text.pos.to_vec2());
@@ -1789,7 +1827,51 @@ mod tests {
                 }}
                 output.textures_delta.clear();
             }
-        }}}
+        }}}}
+    }
+
+    #[test]
+    fn volume_context_menu_opens_from_rail_and_exact_input_without_changing_volume() {
+        for (filmcraft, right_click_rail) in [(false, true), (false, false), (true, true), (true, false)] {
+            let ctx = egui::Context::default();
+            let mut time = 0.0;
+            let mut frame = |events| {
+                time += 0.1;
+                let mut output = ctx.run_ui(egui::RawInput { time: Some(time), events, ..Default::default() }, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.set_width(160.0);
+                        let (changed, response) = volume_slider_widgets(ui, 67.0, true, "Volume", filmcraft);
+                        assert_eq!(changed, None, "the menu gesture changed the volume");
+                        response.context_menu(|ui| {
+                            volume_context_menu(ui, false, true, crate::config::AppLanguage::English);
+                        });
+                    });
+                });
+                output.textures_delta.clear();
+                output
+            };
+            frame(vec![]);
+            let output = frame(vec![]);
+            let value_point = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text().contains("67") =>
+                    Some(text.pos + text.galley.rect.center().to_vec2()),
+                _ => None,
+            }).expect("exact volume input");
+            let point = if right_click_rail { value_point - egui::vec2(90.0, 0.0) } else { value_point };
+            let press = |pressed| egui::Event::PointerButton {
+                pos: point, pressed, button: egui::PointerButton::Secondary,
+                modifiers: egui::Modifiers::NONE,
+            };
+            frame(vec![egui::Event::PointerMoved(point), press(true)]);
+            frame(vec![press(false)]);
+            let output = frame(vec![]);
+            for label in ["Reset volume to 100%", "Mute", "Allow volume above 100%"] {
+                assert!(output.shapes.iter().any(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => text.galley.text().contains(label),
+                    _ => false,
+                }), "missing {label} when right-clicking at {point:?}");
+            }
+        }
     }
 
     #[test]
@@ -1799,7 +1881,7 @@ mod tests {
             let mut frame=|events| {
                 time+=0.1;
                 let mut output=ctx.run_ui(egui::RawInput {time:Some(time),events,..Default::default()},|ui| {
-                    ui.horizontal(|ui| {ui.set_width(160.0); if let Some(value)=volume_slider_widgets(ui,volume,"Volume",filmcraft) {volume=value;}});
+                    ui.horizontal(|ui| {ui.set_width(160.0); if let Some(value)=volume_slider_widgets(ui,volume,false,"Volume",filmcraft).0 {volume=value;}});
                 }); output.textures_delta.clear(); output
             };
             frame(vec![]); let output=frame(vec![]);

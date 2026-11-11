@@ -42,6 +42,7 @@ export interface PlayerState {
   timeline_wheel_preferences?: TimelineWheelPreferences;
   playing?: boolean;
   volume?: number;
+  volume_boost?: boolean;
   playback_time?: number;
   duration?: number;
   media_fps?: number;

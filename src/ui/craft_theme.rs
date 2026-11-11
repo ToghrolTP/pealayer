@@ -805,7 +805,12 @@ pub fn paint_monitor_seek(ui: &egui::Ui, response: &egui::Response, fraction: f3
     if response.has_focus() { p.rect_stroke(response.rect.shrink(0.5),3.0,Stroke::new(1.0,tokens.focus),StrokeKind::Inside); }
 }
 
-pub fn paint_monitor_volume(ui: &egui::Ui, response: &egui::Response, fraction: f32) {
+pub fn paint_monitor_volume(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    fraction: f32,
+    boost_boundary: Option<f32>,
+) {
     let t = current(ui.ctx());
     let color = |c: Color32| c.gamma_multiply(if response.enabled() {1.0} else {0.4});
     let range = super::controls::seekbar_value_range(response.rect);
@@ -813,10 +818,28 @@ pub fn paint_monitor_volume(ui: &egui::Ui, response: &egui::Response, fraction: 
     let x = egui::lerp(range.clone(),fraction.clamp(0.0,1.0));
     let p=ui.painter().with_clip_rect(response.rect.intersect(ui.clip_rect()));
     let track=egui::Rect::from_min_max(egui::pos2(*range.start(),response.rect.center().y-2.0),egui::pos2(*range.end(),response.rect.center().y+2.0));
-    p.rect_filled(track,2.0,color(t.separator));
-    p.rect_filled(egui::Rect::from_min_max(track.min,egui::pos2(x,track.bottom())),2.0,color(t.accent));
+    let danger = ui.visuals().error_fg_color;
+    let boosted = boost_boundary.is_some_and(|boundary| fraction > boundary);
+    let boundary_x = boost_boundary.map_or(track.right(), |boundary| egui::lerp(range, boundary));
+    let segment = |left, right| egui::Rect::from_min_max(
+        egui::pos2(left, track.top()), egui::pos2(right, track.bottom()),
+    );
+    p.rect_filled(track, 2.0, color(t.separator));
+    p.rect_filled(segment(track.left(), x.min(boundary_x)), 2.0, color(t.accent));
+    if boost_boundary.is_some() {
+        p.rect_filled(segment(boundary_x, track.right()), 2.0, color(danger.gamma_multiply(0.42)));
+        if boosted {
+            p.rect_filled(segment(boundary_x, x), 2.0, color(danger));
+        }
+        let tick = egui::pos2(p.round_to_pixel_center(boundary_x), track.center().y);
+        p.line_segment([tick - egui::vec2(0.0, 4.0), tick + egui::vec2(0.0, 4.0)],
+            Stroke::new(1.0, color(t.tab_text_active)));
+    }
+    let handle = if boosted { danger } else if response.hovered() || response.dragged() {
+        t.tab_text_active
+    } else { t.icon_active };
     p.circle_filled(egui::pos2(x,track.center().y),4.5,color(t.panel_bg));
-    p.circle_stroke(egui::pos2(x,track.center().y),4.5,Stroke::new(1.5,color(if response.hovered() || response.dragged() {t.tab_text_active} else {t.icon_active})));
+    p.circle_stroke(egui::pos2(x,track.center().y),4.5,Stroke::new(1.5,color(handle)));
     if response.has_focus() { p.rect_stroke(response.rect.shrink(0.5),3.0,Stroke::new(1.0,t.focus),StrokeKind::Inside); }
 }
 
@@ -1034,7 +1057,7 @@ mod tests {
             let output=ctx.run_ui(egui::RawInput::default(),|ui| {
                 let (_,response)=ui.allocate_exact_size(egui::vec2(400.0,28.0),egui::Sense::click_and_drag());
                 super::paint_monitor_seek(ui,&response,0.4375,Some(0.75));
-                super::paint_monitor_volume(ui,&response,0.5);
+                super::paint_monitor_volume(ui,&response,0.5,None);
             });
             assert!(output.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Path(p) if p.closed && p.points.len()==5)),"live monitor lost its pentagonal playhead");
             assert!(output.shapes.iter().filter(|s|matches!(&s.shape,egui::Shape::Circle(_))).count()>=6,"terminal and volume rings lost");

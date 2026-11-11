@@ -1158,6 +1158,7 @@ pub struct AppConfig {
     pub project_discovery: crate::projects::Discovery,
     pub external_mpv: crate::mpv::external::Settings,
     pub volume: f64,
+    pub volume_boost: bool,
     pub is_muted: bool,
     /// mpv audio-device name, including its backend prefix; `auto` uses OS default.
     pub audio_device: String,
@@ -1390,6 +1391,7 @@ impl Default for AppConfig {
             project_discovery: crate::projects::Discovery::default(),
             external_mpv: crate::mpv::external::Settings::default(),
             volume: 100.0,
+            volume_boost: false,
             is_muted: false,
             audio_device: "auto".to_string(),
             sfx_audio_device: String::new(),
@@ -1874,6 +1876,13 @@ pub fn resolved_web_bind_addresses(config: &AppConfig) -> Result<Vec<std::net::I
     crate::network::parse_bind_addresses(&values)
 }
 
+pub const NORMAL_VOLUME_LIMIT: f64 = 100.0;
+pub const BOOSTED_VOLUME_LIMIT: f64 = 130.0;
+
+pub fn volume_limit(boost: bool) -> f64 {
+    if boost { BOOSTED_VOLUME_LIMIT } else { NORMAL_VOLUME_LIMIT }
+}
+
 impl AppConfig {
     /// Reconcile shared appearance without discarding unrelated editor state.
     pub(crate) fn copy_appearance_from(&mut self, source: &Self) {
@@ -2183,6 +2192,7 @@ impl AppConfig {
             .map_err(|error| format!("invalid configuration update: {error}"))?;
         updated.normalize_workspace_profiles();
         updated.validate()?;
+        updated.volume = updated.volume.min(volume_limit(updated.volume_boost));
         Ok(updated)
     }
 
@@ -2709,6 +2719,18 @@ mod tests {
         );
         drop(watcher);
         let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn disabling_volume_boost_caps_the_saved_level() {
+        let config = AppConfig::default();
+        assert!(!config.volume_boost);
+        let boosted = config.apply_patch(&serde_json::json!({"volume_boost": true, "volume": 120.0})).unwrap();
+        assert!(boosted.volume_boost);
+        assert_eq!(boosted.volume, 120.0);
+        let capped = boosted.apply_patch(&serde_json::json!({"volume_boost": false})).unwrap();
+        assert!(!capped.volume_boost);
+        assert_eq!(capped.volume, 100.0);
     }
 
     #[test]
