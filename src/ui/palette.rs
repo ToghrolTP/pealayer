@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 #[path = "../../assets/themes/native_palette.rs"]
 pub(super) mod native;
 
-fn name(palette: crate::config::ColorPalette) -> &'static str {
+pub(super) fn name(palette: crate::config::ColorPalette) -> &'static str {
     match palette {
         crate::config::ColorPalette::Studio => "studio",
         crate::config::ColorPalette::Pastel => "pastel",

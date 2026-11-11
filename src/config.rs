@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::mpsc::{Receiver, channel};
 
 pub const DEFAULT_PLAYBACK_POSITION_HISTORY_LIMIT: u32 = 50;
 pub const MAX_PLAYBACK_POSITION_HISTORY_LIMIT: u32 = 500;
@@ -941,30 +940,9 @@ impl Default for WorkspaceProfile {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum UiAnimationMode { #[default] System, Enabled, Disabled }
-
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum UiControlDensity { ExtraCompact, #[default] Compact, Regular, Comfortable, Spacious }
-impl UiControlDensity {
-    pub const ALL: [Self; 5] = [Self::ExtraCompact, Self::Compact, Self::Regular, Self::Comfortable, Self::Spacious];
-
-    pub const fn base_height(self) -> f32 {
-        match self {
-            Self::ExtraCompact => 18.0,
-            Self::Compact => 24.0,
-            Self::Regular => 28.0,
-            Self::Comfortable => 32.0,
-            Self::Spacious => 36.0,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum UiFontFamily { #[default] System, Bundled, Vazirmatn, Custom }
+#[path = "../shared/appearance_choices.rs"]
+mod appearance_choices;
+pub use appearance_choices::{UiAnimationMode, UiControlDensity, UiFontFamily};
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -1627,63 +1605,20 @@ pub fn detect_executable_dir() -> PathBuf {
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
+#[path = "../shared/local_config_path.rs"]
+mod local_config_path;
+pub use local_config_path::{resolve_portable_config_path, resolve_system_config_path};
+
 pub fn detect_storage_mode(exe_dir: &std::path::Path) -> StorageMode {
     storage_mode_with_setting(exe_dir, std::env::var("PEALAYER_PORTABLE").ok().as_deref())
 }
 
-// Pass the setting explicitly so tests never mutate the process environment
-// underneath libmpv/native threads or other storage/configuration tests.
 fn storage_mode_with_setting(exe_dir: &std::path::Path, portable: Option<&str>) -> StorageMode {
-    if portable.is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
-        || exe_dir.join("portable.flag").exists()
-        || exe_dir.join("pealayer.json").exists()
-        || exe_dir.join("portable.dat").exists()
-    {
+    if local_config_path::is_portable(exe_dir, portable) {
         StorageMode::Portable
     } else {
         StorageMode::System
     }
-}
-
-pub fn resolve_portable_config_path(exe_dir: &std::path::Path) -> PathBuf {
-    exe_dir.join("pealayer.json")
-}
-
-pub fn resolve_system_config_path() -> PathBuf {
-    #[cfg(target_os = "windows")]
-    {
-        if let Ok(appdata) = std::env::var("APPDATA") {
-            return PathBuf::from(appdata).join("pealayer").join("config.json");
-        }
-        if let Ok(userprofile) = std::env::var("USERPROFILE") {
-            return PathBuf::from(userprofile)
-                .join("AppData")
-                .join("Roaming")
-                .join("pealayer")
-                .join("config.json");
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home)
-                .join("Library")
-                .join("Application Support")
-                .join("Pealayer")
-                .join("config.json");
-        }
-    }
-
-    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-        return PathBuf::from(xdg).join("pealayer").join("config.json");
-    }
-
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home)
-        .join(".config")
-        .join("pealayer")
-        .join("config.json")
 }
 
 /// A compact, privacy-preserving location for UI surfaces. Configuration
@@ -1714,63 +1649,9 @@ pub fn display_config_path(path: &std::path::Path) -> String {
 
 /// Native filesystem notifications for the authoritative JSON configuration.
 /// The parent directory is watched so atomic file replacement remains visible.
-pub struct ConfigFileWatcher {
-    _watcher: notify::RecommendedWatcher,
-    events: Receiver<notify::Result<notify::Event>>,
-}
-
-impl ConfigFileWatcher {
-    pub fn new(
-        path: &std::path::Path,
-        wake_ui: impl Fn() + Send + 'static,
-    ) -> Result<Self, String> {
-        use notify::Watcher;
-
-        let parent = path
-            .parent()
-            .ok_or_else(|| format!("configuration path has no parent: {}", path.display()))?;
-        std::fs::create_dir_all(parent).map_err(|error| {
-            format!(
-                "create configuration directory {}: {error}",
-                parent.display()
-            )
-        })?;
-        let (sender, events) = channel();
-        let mut watcher =
-            notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-                let _ = sender.send(event);
-                wake_ui();
-            })
-            .map_err(|error| format!("create configuration file watcher: {error}"))?;
-        watcher
-            .watch(parent, notify::RecursiveMode::NonRecursive)
-            .map_err(|error| {
-                format!(
-                    "watch configuration directory {}: {error}",
-                    parent.display()
-                )
-            })?;
-        Ok(Self {
-            _watcher: watcher,
-            events,
-        })
-    }
-
-    pub fn take_changed(&self) -> Result<bool, String> {
-        let mut changed = false;
-        let mut last_error = None;
-        while let Ok(event) = self.events.try_recv() {
-            match event {
-                Ok(event) if !matches!(event.kind, notify::EventKind::Access(_)) => changed = true,
-                Ok(_) => {}
-                Err(error) => last_error = Some(error.to_string()),
-            }
-        }
-        last_error.map_or(Ok(changed), |error| {
-            Err(format!("configuration file watcher: {error}"))
-        })
-    }
-}
+#[path = "../shared/config_file_watcher.rs"]
+mod config_file_watcher;
+pub use config_file_watcher::ConfigFileWatcher;
 
 fn parse_language_tag(value: &str) -> Option<AppLanguage> {
     let normalized = value.trim().replace('_', "-").to_ascii_lowercase();

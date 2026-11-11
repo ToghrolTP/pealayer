@@ -101,3 +101,82 @@ pub fn configure_density(style: &mut egui::Style, height: f32) {
         state.expansion = 0.0;
     }
 }
+
+pub fn accent_foreground(accent: egui::Color32) -> egui::Color32 {
+    if (u32::from(accent.r()) * 299 + u32::from(accent.g()) * 587 + u32::from(accent.b()) * 114)
+        > 150_000
+    {
+        egui::Color32::from_rgb(20, 20, 20)
+    } else {
+        egui::Color32::WHITE
+    }
+}
+
+pub fn light_accent_fill(accent: egui::Color32) -> egui::Color32 {
+    let tint = |channel: u8| ((u16::from(channel) * 28 + 255 * 72) / 100) as u8;
+    egui::Color32::from_rgb(tint(accent.r()), tint(accent.g()), tint(accent.b()))
+}
+
+fn dark_accent_fill(
+    accent: egui::Color32,
+    surface: egui::Color32,
+) -> egui::Color32 {
+    let tint =
+        |channel: u8, base: u8| ((u16::from(channel) * 28 + u16::from(base) * 72) / 100) as u8;
+    egui::Color32::from_rgb(
+        tint(accent.r(), surface.r()),
+        tint(accent.g(), surface.g()),
+        tint(accent.b(), surface.b()),
+    )
+}
+
+/// Native window and control surfaces shared by the player and the utility.
+pub fn desktop_visuals(palette: &str, accent: egui::Color32) -> (egui::Visuals, egui::Visuals) {
+    use egui::{CornerRadius, Stroke, Visuals};
+    let mut dark = Visuals::dark();
+    let mut light = Visuals::light();
+    dark.weak_text_alpha = 0.74;
+    light.weak_text_alpha = 0.76;
+
+    for visuals in [&mut dark, &mut light] {
+        apply(visuals, palette);
+        visuals.window_corner_radius = CornerRadius::same(10);
+        visuals.menu_corner_radius = CornerRadius::same(8);
+        visuals.hyperlink_color = accent;
+        visuals.selection.bg_fill = accent;
+        visuals.selection.stroke = Stroke::new(1.0, accent_foreground(accent));
+
+        let active = if visuals.dark_mode {
+            dark_accent_fill(accent, color(palette, true, "surface-2"))
+        } else {
+            light_accent_fill(accent)
+        };
+        // egui also uses the active foreground for strong captions. Keep the
+        // normal text color on those captions and contrast text on selections.
+        visuals.widgets.active.weak_bg_fill = active;
+        visuals.widgets.active.bg_fill = active;
+        visuals.widgets.active.fg_stroke = Stroke::new(1.0, visuals.text_color());
+        visuals.widgets.hovered.bg_stroke = visuals.widgets.inactive.bg_stroke;
+        if palette == "pastel" {
+            let edge = Stroke::new(1.0, color(palette, visuals.dark_mode, "hover-line"));
+            visuals.widgets.hovered.bg_stroke = edge;
+            visuals.widgets.open.bg_stroke = edge;
+            visuals.widgets.active.bg_stroke = Stroke::new(1.0, accent);
+        }
+    }
+
+    (dark, light)
+}
+
+pub fn configure_interaction_style(style: &mut egui::Style) {
+    style.interaction.selectable_labels = false;
+    style.interaction.multi_widget_text_select = false;
+}
+
+pub fn configure_desktop_text_sizes(ctx: &egui::Context) {
+    ctx.all_styles_mut(|style| {
+        for font_id in style.text_styles.values_mut() {
+            font_id.size = font_id.size.min(12.0);
+        }
+    });
+}

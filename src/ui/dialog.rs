@@ -132,13 +132,7 @@ pub fn confirmation_modal(ctx: &egui::Context, id: egui::Id, heading: &str,
     ConfirmationResponse { dismissed, close }
 }
 
-/// Single-line input text stays centered when its row supplies extra height.
-/// Multiline/wrapped editors intentionally keep TextEdit's top alignment.
-pub fn singleline_text_edit<'a>(ui: &egui::Ui, text: &'a mut dyn egui::TextBuffer) -> egui::TextEdit<'a> {
-    egui::TextEdit::singleline(text).vertical_align(egui::Align::Center)
-        .font(egui::TextStyle::Button).margin(egui::Margin::symmetric(4, 0))
-        .min_size(egui::vec2(0.0, crate::ui::control_density::height(ui)))
-}
+pub use super::palette::native::controls::singleline_text_edit;
 
 /// Inline captions and editors share one fixed slot. Paint the outline inside
 /// that slot instead of letting a TextEdit frame move its baseline by a pixel.

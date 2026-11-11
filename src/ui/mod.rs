@@ -82,8 +82,7 @@ pub mod workspace_profiles;
 /// Editable widgets (and any labels explicitly marked selectable) retain their
 /// normal text-editing behavior.
 pub fn configure_interaction_style(style: &mut eframe::egui::Style) {
-    style.interaction.selectable_labels = false;
-    style.interaction.multi_widget_text_select = false;
+    palette::native::configure_interaction_style(style);
 }
 
 pub fn platform_accent_rgb(config: &crate::config::AppConfig) -> [u8; 3] {
@@ -107,33 +106,7 @@ pub fn platform_accent_rgb(config: &crate::config::AppConfig) -> [u8; 3] {
     }
 }
 
-fn accent_foreground(accent: eframe::egui::Color32) -> eframe::egui::Color32 {
-    if (u32::from(accent.r()) * 299 + u32::from(accent.g()) * 587 + u32::from(accent.b()) * 114)
-        > 150_000
-    {
-        eframe::egui::Color32::from_rgb(20, 20, 20)
-    } else {
-        eframe::egui::Color32::WHITE
-    }
-}
-
-fn light_accent_fill(accent: eframe::egui::Color32) -> eframe::egui::Color32 {
-    let tint = |channel: u8| ((u16::from(channel) * 28 + 255 * 72) / 100) as u8;
-    eframe::egui::Color32::from_rgb(tint(accent.r()), tint(accent.g()), tint(accent.b()))
-}
-
-fn dark_accent_fill(
-    accent: eframe::egui::Color32,
-    surface: eframe::egui::Color32,
-) -> eframe::egui::Color32 {
-    let tint =
-        |channel: u8, base: u8| ((u16::from(channel) * 28 + u16::from(base) * 72) / 100) as u8;
-    eframe::egui::Color32::from_rgb(
-        tint(accent.r(), surface.r()),
-        tint(accent.g(), surface.g()),
-        tint(accent.b(), surface.b()),
-    )
-}
+use palette::native::accent_foreground;
 
 /// Keep System as a preference, not a snapshot of the current OS scheme.
 /// eframe/winit supplies native ThemeChanged events to egui's system_theme;
@@ -164,13 +137,7 @@ pub fn sync_native_window_appearance(
 /// Apply theme-independent desktop defaults to both styles, so a live OS
 /// switch cannot reset font sizes or re-enable selection of static captions.
 pub fn configure_main_window_style(ctx: &eframe::egui::Context) {
-    ctx.all_styles_mut(|style| {
-        for font_id in style.text_styles.values_mut() {
-            if font_id.size > 12.0 {
-                font_id.size = 12.0;
-            }
-        }
-    });
+    palette::native::configure_desktop_text_sizes(ctx);
 }
 
 /// Install a restrained native desktop palette for both themes. The active
@@ -180,101 +147,15 @@ pub fn configure_native_visuals(ctx: &eframe::egui::Context, config: &crate::con
     window_chrome::install(ctx);
     i18n::configure_preferred_fonts(ctx, config);
     color_picker::configure_language(ctx, config.language);
-    use eframe::egui::{Color32, CornerRadius, Stroke, Theme, Visuals};
+    use eframe::egui::{Color32, Theme};
 
     let [red, green, blue] = platform_accent_rgb(config);
     let accent = Color32::from_rgb(red, green, blue);
-    let accent_text = accent_foreground(accent);
-
-    let mut dark = Visuals::dark();
-    dark.panel_fill = Color32::from_rgb(32, 32, 32);
-    dark.window_fill = Color32::from_rgb(36, 36, 36);
-    dark.extreme_bg_color = Color32::from_rgb(24, 24, 24);
-    dark.faint_bg_color = Color32::from_rgb(45, 45, 45);
-    dark.weak_text_alpha = 0.74;
-    dark.hyperlink_color = accent;
-    dark.selection.bg_fill = accent;
-    dark.selection.stroke = Stroke::new(1.0_f32, accent_text);
-    dark.widgets.inactive.weak_bg_fill = Color32::from_rgb(45, 45, 45);
-    dark.widgets.inactive.bg_fill = Color32::from_rgb(45, 45, 45);
-    dark.widgets.hovered.weak_bg_fill = Color32::from_rgb(55, 55, 55);
-    dark.widgets.hovered.bg_fill = Color32::from_rgb(55, 55, 55);
-    // egui uses the active foreground for ordinary bold captions too. A
-    // bright accent's dark contrast text must only be used on selected fills,
-    // never on dark panels. Tint active controls and keep their text light.
-    let dark_active = dark_accent_fill(
-        accent,
-        palette::color(config.color_palette, true, "surface-2"),
-    );
-    dark.widgets.active.weak_bg_fill = dark_active;
-    dark.widgets.active.bg_fill = dark_active;
-    dark.widgets.active.fg_stroke =
-        Stroke::new(1.0_f32, palette::color(config.color_palette, true, "text"));
-    dark.window_corner_radius = CornerRadius::same(10);
-    dark.menu_corner_radius = CornerRadius::same(8);
-
-    let mut light = Visuals::light();
-    light.panel_fill = Color32::from_rgb(243, 243, 243);
-    light.window_fill = Color32::from_rgb(250, 250, 250);
-    light.extreme_bg_color = Color32::WHITE;
-    light.faint_bg_color = Color32::from_rgb(238, 238, 238);
-    light.weak_text_alpha = 0.76;
-    light.hyperlink_color = accent;
-    light.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(35, 42, 52));
-    light.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(42, 50, 61));
-    light.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(23, 29, 38));
-    light.selection.bg_fill = accent;
-    light.selection.stroke = Stroke::new(1.0_f32, accent_text);
-    light.widgets.inactive.weak_bg_fill = Color32::from_rgb(251, 251, 251);
-    light.widgets.inactive.bg_fill = Color32::from_rgb(251, 251, 251);
-    light.widgets.hovered.weak_bg_fill = Color32::from_rgb(242, 242, 242);
-    light.widgets.hovered.bg_fill = Color32::from_rgb(242, 242, 242);
-    // egui also uses the active-widget foreground for `RichText::strong()`.
-    // White contrast text on a saturated accent therefore made every strong
-    // caption disappear on ordinary light surfaces. Keep the active surface a
-    // pale accent tint and its foreground dark; selected items retain the full
-    // accent plus `selection.stroke` contrast above.
-    light.widgets.active.weak_bg_fill = light_accent_fill(accent);
-    light.widgets.active.bg_fill = light_accent_fill(accent);
-    light.widgets.active.fg_stroke =
-        Stroke::new(1.0_f32, palette::color(config.color_palette, false, "text"));
-    light.window_corner_radius = CornerRadius::same(10);
-    light.menu_corner_radius = CornerRadius::same(8);
-
-    palette::apply(&mut dark, config.color_palette);
-    palette::apply(&mut light, config.color_palette);
-
+    let (dark, light) = palette::native::desktop_visuals(palette::name(config.color_palette), accent);
     let tokens_dark = craft_theme::Tokens::for_kind(craft_theme::ThemeKind::Dark)
         .with_appearance(Some([red, green, blue]), false).with_visuals(&dark);
     let tokens_light = craft_theme::Tokens::for_kind(craft_theme::ThemeKind::Light)
         .with_appearance(Some([red, green, blue]), false).with_visuals(&light);
-
-    // Apply FilmCraft widget interaction fills, strokes, and borders
-    dark.widgets.hovered.bg_fill = tokens_dark.hover;
-    dark.widgets.active.bg_fill = tokens_dark.pressed;
-    dark.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, tokens_dark.field_border);
-    dark.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, tokens_dark.field_border);
-    dark.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, tokens_dark.separator);
-    dark.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, tokens_dark.tab_text_active);
-    dark.widgets.active.fg_stroke = Stroke::new(1.0_f32, tokens_dark.tab_text_active);
-
-    light.widgets.hovered.bg_fill = tokens_light.hover;
-    light.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, tokens_light.field_border);
-    light.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, tokens_light.field_border);
-    light.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, tokens_light.separator);
-
-    if config.color_palette == crate::config::ColorPalette::Pastel {
-        for visuals in [&mut dark, &mut light] {
-            let edge = Stroke::new(
-                1.0,
-                palette::color(config.color_palette, visuals.dark_mode, "hover-line"),
-            );
-            visuals.widgets.hovered.bg_stroke = edge;
-            visuals.widgets.open.bg_stroke = edge;
-            visuals.widgets.active.bg_stroke = Stroke::new(1.0, accent);
-            visuals.widgets.active.weak_bg_fill = visuals.widgets.active.bg_fill;
-        }
-    }
 
     ctx.set_visuals_of(Theme::Dark, dark);
     ctx.set_visuals_of(Theme::Light, light);
@@ -434,7 +315,7 @@ mod tests {
 
     #[test]
     fn light_accent_surface_is_tinted_instead_of_saturated() {
-        let fill = super::light_accent_fill(Color32::from_rgb(0, 120, 212));
+        let fill = super::palette::native::light_accent_fill(Color32::from_rgb(0, 120, 212));
         assert_eq!(fill, Color32::from_rgb(183, 217, 242));
     }
 
