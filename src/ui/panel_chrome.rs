@@ -883,8 +883,11 @@ mod tests {
         let mut config = previous.clone();
         config.craft_show_close_buttons = true;
         config.craft_show_collapse_buttons = false;
+        config.color_palette = crate::config::ColorPalette::Studio;
+        config.theme = crate::config::AppTheme::Dark;
         crate::platform::interop::set_live_config(config.clone());
         let (ctx, mut app) = fixture(false);
+        crate::ui::configure_native_appearance(&ctx, &config);
         let before = app.dock_state.clone();
         frame(&ctx, &mut app, vec![], false);
         let output = frame(&ctx, &mut app, vec![], false);
@@ -900,15 +903,24 @@ mod tests {
         config.workspace_swap_panel_colors = true;
         config.workspace_round_panel_tabs = true;
         crate::platform::interop::set_live_config(config);
+        frame(&ctx, &mut app, vec![], false);
         let output = frame(&ctx, &mut app, vec![], false);
         crate::platform::interop::set_live_config(previous);
         assert!(!output.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Text(text) if text.galley.text()==crate::ui::icons::X)));
         assert!(output.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Text(text) if text.galley.text()==crate::ui::icons::CARET_DOWN)));
         let active_tab = ctx.read_response(tab_id(egui::Id::new("workspace_dock_area"), Tab::EffectControls)).unwrap();
         let tokens = super::super::craft_theme::current(&ctx);
+        assert_ne!(tokens.panel_bg, tokens.tab_bg);
         assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Rect(rect)
             if rect.rect == active_tab.rect && rect.fill == tokens.tab_bg
-                && rect.corner_radius.nw == 5 && rect.corner_radius.sw == 0)));
+                && rect.corner_radius.nw == 5 && rect.corner_radius.sw == 0)),
+            "active tab {:?}, expected fill {:?}, nearby rectangles {:?}",
+            active_tab.rect, tokens.tab_bg, output.shapes.iter().filter_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect) if rect.rect.intersects(active_tab.rect) => {
+                    Some((rect.rect, rect.fill, rect.corner_radius))
+                }
+                _ => None,
+            }).take(12).collect::<Vec<_>>());
         assert_eq!(app.dock_state, before);
     }
 

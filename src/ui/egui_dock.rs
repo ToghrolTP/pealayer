@@ -37,9 +37,8 @@ fn tab_buttons_id() -> egui::Id {
 const HEADER_BUTTON_WIDTH: f32 = 24.0;
 
 /// Both renderers consume the live application palette; never reinstall a theme.
-fn dock_style(ui: &egui::Ui) -> egui_dock::Style {
+fn dock_style(ui: &egui::Ui, options: HeaderOptions) -> egui_dock::Style {
     let t = super::craft_theme::current(ui.ctx());
-    let options = HeaderOptions::current();
     let (panel, tabs) = options.colors(&t);
     let corners = options.tab_corners();
     let mut style = egui_dock::Style::from_egui(ui.style());
@@ -153,12 +152,12 @@ fn decorate_headers(
     dock: &DockState<Tab>,
     height: f32,
     interactive: bool,
+    options: HeaderOptions,
 ) {
     let buttons = ui
         .data(|d| d.get_temp::<Vec<TabButton>>(tab_buttons_id()))
         .unwrap_or_default();
     let t = super::craft_theme::current(ui.ctx());
-    let options = HeaderOptions::current();
     let show_disclosure = !app.dock_state.locked && options.dock_collapse;
     for (path, leaf) in dock.iter_leaves() {
         if !leaf.rect.is_positive() || leaf.tabs.is_empty() {
@@ -569,11 +568,12 @@ pub fn show(app: &mut PealayerApp, ui: &mut egui::Ui, reveal: Option<Tab>) {
     }
     let before = read_layout(&projection.dock, &projection.source);
     let locked = app.dock_state.locked;
-    let show_disclosure = !locked && HeaderOptions::current().dock_collapse;
+    let options = HeaderOptions::current();
+    let show_disclosure = !locked && options.dock_collapse;
     let layer = ui.layer_id();
     let blocked = !ui.ctx().memory(|m| m.is_above_modal_layer(layer));
     ui.data_mut(|d| d.insert_temp(tab_buttons_id(), Vec::<TabButton>::new()));
-    let style = dock_style(ui);
+    let style = dock_style(ui, options);
     let header_height = style.tab_bar.height;
     app.workspace_rendering = true;
     ui.add_enabled_ui(!blocked, |ui| {
@@ -602,6 +602,7 @@ pub fn show(app: &mut PealayerApp, ui: &mut egui::Ui, reveal: Option<Tab>) {
         &projection.dock,
         header_height,
         !blocked && ui.is_enabled(),
+        options,
     );
     app.workspace_rendering = false;
     if !app.pending_tab_reveals.is_empty() {
@@ -951,7 +952,7 @@ mod tests {
                     "collapse must not delete or rearrange panels"
                 );
                 ctx.run_ui(Default::default(), |ui| {
-                    let style = dock_style(ui);
+                    let style = dock_style(ui, HeaderOptions::current());
                     let tokens = super::super::craft_theme::current(&ctx);
                     assert_eq!(style.tab.focused.outline_color, egui::Color32::TRANSPARENT);
                     assert_eq!(style.tab_bar.bg_fill, tokens.tab_bg);
@@ -979,8 +980,11 @@ mod tests {
         config.egui_dock_show_collapse_buttons = false;
         config.workspace_swap_panel_colors = true;
         config.workspace_round_panel_tabs = true;
-        crate::platform::interop::set_live_config(config);
+        config.color_palette = crate::config::ColorPalette::Studio;
+        config.theme = crate::config::AppTheme::Dark;
         let (ctx, mut app) = fixture();
+        crate::ui::configure_native_appearance(&ctx, &config);
+        crate::platform::interop::set_live_config(config);
         let before = app.dock_state.clone();
         frame(&ctx, &mut app, vec![]);
         let output = frame(&ctx, &mut app, vec![]);
@@ -988,6 +992,7 @@ mod tests {
         assert!(!has_text(&output, super::super::icons::CARET_DOWN));
         assert!(has_text(&output, super::super::icons::X));
         let tokens = super::super::craft_theme::current(&ctx);
+        assert_ne!(tokens.panel_bg, tokens.tab_bg);
         assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Rect(rect)
             if rect.fill == tokens.tab_bg && rect.corner_radius.nw == 5 && rect.corner_radius.sw == 0)));
         assert_eq!(app.dock_state, before);
