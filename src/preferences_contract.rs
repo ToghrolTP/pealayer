@@ -586,6 +586,7 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             &[("standard", "Standard"), ("film_craft", "FilmCraft")]),
         PreferenceControl::boolean("craft_show_close_buttons", "appearance", "Workspace panels", "Show CraftUI panel close buttons"),
         PreferenceControl::boolean("workspace_swap_panel_colors", "appearance", "Advanced tweaks", "Swap panel and tab colors"),
+        PreferenceControl::boolean("transport_idle_backgrounds", "appearance", "Advanced tweaks", "Show idle transport button backgrounds"),
         PreferenceControl::boolean("workspace_round_panel_tabs", "appearance", "Advanced tweaks", "Round panel tab headers"),
         PreferenceControl::boolean("craft_show_collapse_buttons", "appearance", "Advanced tweaks", "Show CraftUI collapse chevrons"),
         PreferenceControl::boolean("egui_dock_show_collapse_buttons", "appearance", "Advanced tweaks", "Show egui Dock collapse chevrons"),
@@ -1576,6 +1577,7 @@ fn semantic_preference_icon(control: &PreferenceControl) -> &'static str {
         "craft_show_close_buttons" => "x",
         "craft_show_collapse_buttons" | "egui_dock_show_collapse_buttons" => "caret-down",
         "workspace_swap_panel_colors" => "palette",
+        "transport_idle_backgrounds" => "play",
         "workspace_round_panel_tabs" => "tabs",
         "preferences_grouped_navigation" => "list-checks",
         "ui_font_family" | "monospace_font_family" | "ui_font_name" | "monospace_font_name" => "text-t",
@@ -1821,6 +1823,7 @@ mod tests {
             ("craft_show_collapse_buttons", false, "caret-down"),
             ("egui_dock_show_collapse_buttons", true, "caret-down"),
             ("workspace_swap_panel_colors", false, "palette"),
+            ("transport_idle_backgrounds", true, "play"),
             ("workspace_round_panel_tabs", false, "tabs"),
         ] {
             let row=contract.controls.iter().find(|row|row.key==key).unwrap();
@@ -1831,12 +1834,14 @@ mod tests {
         config.craft_show_close_buttons=false;config.craft_show_collapse_buttons=true;
         config.egui_dock_show_collapse_buttons = false;
         config.workspace_swap_panel_colors = true;
+        config.transport_idle_backgrounds = false;
         config.workspace_round_panel_tabs = true;
         let restored:crate::config::AppConfig=serde_json::from_value(serde_json::to_value(&config).unwrap()).unwrap();
         let mut preview=crate::config::AppConfig::default();preview.copy_appearance_from(&restored);
         assert!(!preview.craft_show_close_buttons);assert!(preview.craft_show_collapse_buttons);
         assert!(!preview.egui_dock_show_collapse_buttons);
         assert!(preview.workspace_swap_panel_colors && preview.workspace_round_panel_tabs);
+        assert!(!preview.transport_idle_backgrounds);
     }
     #[test]
     fn density_slider_choices_match_serialized_shared_sizes() {

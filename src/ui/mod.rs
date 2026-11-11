@@ -113,6 +113,7 @@ use palette::native::accent_foreground;
 /// selecting an explicit theme here would stop following those events.
 pub fn configure_native_appearance(ctx: &eframe::egui::Context, config: &crate::config::AppConfig) {
     motion::configure(ctx, config.ui_animation_mode);
+    control_bar::configure_idle_backgrounds(ctx, config.transport_idle_backgrounds);
     ctx.set_theme(match crate::config::resolved_theme(config) {
         crate::config::AppTheme::System => eframe::egui::ThemePreference::System,
         crate::config::AppTheme::Light => eframe::egui::ThemePreference::Light,

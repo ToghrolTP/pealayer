@@ -431,12 +431,21 @@ pub(crate) fn draw_group(
         app.request_control_bar_save(ui.ctx());
     }
 }
+fn idle_backgrounds_id() -> Id {
+    Id::unique("transport-idle-backgrounds")
+}
+
+pub(super) fn configure_idle_backgrounds(ctx: &egui::Context, show: bool) {
+    ctx.data_mut(|data| data.insert_temp(idle_backgrounds_id(), show));
+}
+
 fn draw_actions(app: &mut PealayerApp, ui: &mut egui::Ui, surface: Surface, end: bool, owner: Id, shown: Option<&[Action]>) {
     let layout = app.control_bars.layout(surface);
     let actions: Vec<_> = layout.ordered().into_iter().filter(|a| {
         supported(*a, surface) && !layout.hidden[*a as usize] && layout.end[*a as usize] == end
             && shown.is_none_or(|shown| shown.contains(a))
     }).collect();
+    let idle_backgrounds = ui.data(|data| data.get_temp(idle_backgrounds_id())).unwrap_or(true);
     let terminal = surface == Surface::Monitor && end && actions.last() == Some(&Action::Fullscreen);
     let mut requested = None;
     for action in actions {
@@ -478,16 +487,6 @@ fn draw_actions(app: &mut PealayerApp, ui: &mut egui::Ui, surface: Surface, end:
                     Action::Mute => Some("amber"),
                     _ => None,
                 };
-                if let Some(role) = role {
-                    super::controls::contextual_transport_style(
-                        ui.style_mut(),
-                        app.color_palette,
-                        role,
-                        action == Action::PlayPause && app.is_active_playback()
-                            || action == Action::Mute && app.is_muted,
-                        is_enabled,
-                    );
-                }
                 let text = if matches!(action, Action::Back | Action::Forward) {
                     String::new()
                 } else {
@@ -497,16 +496,18 @@ fn draw_actions(app: &mut PealayerApp, ui: &mut egui::Ui, surface: Surface, end:
                 let button_rect = if volume {
                     egui::Rect::from_min_size(egui::pos2(if app.rtl {rect.right() - h} else {rect.left()}, rect.top()), egui::vec2(h,h))
                 } else { rect };
-                let response = super::action_customization::control(
-                    ui,
-                    button_rect,
-                    id,
-                    &text,
-                    &app.tr(label(action)),
-                    is_enabled,
-                    action == Action::Pin && app.pin_controls,
-                    true,
-                );
+                let label = app.tr(label(action));
+                let response = if role.is_some() || matches!(action, Action::Back | Action::Forward
+                    | Action::PreviousChapter | Action::NextChapter) {
+                    let intent = role.map(|role| super::palette::color(app.color_palette, ui.visuals().dark_mode, role));
+                    let active = action == Action::PlayPause && app.is_active_playback()
+                        || action == Action::Mute && app.is_muted;
+                    super::action_customization::transport_control(ui, button_rect, id, &text, &label,
+                        is_enabled, super::action_customization::TransportPaint { intent, active, idle_backgrounds })
+                } else {
+                    super::action_customization::control(ui, button_rect, id, &text, &label,
+                        is_enabled, action == Action::Pin && app.pin_controls, true)
+                };
                 if volume {
                     let slider_rect = egui::Rect::from_min_max(
                         egui::pos2(if app.rtl {rect.left()} else {button_rect.right() + ui.spacing().item_spacing.x},rect.top()),
@@ -705,6 +706,147 @@ mod tests {
             .unwrap()
             .rect
     }
+    fn transport_paint(
+        ctx: &egui::Context,
+        output: &egui::FullOutput,
+        surface: Surface,
+        action: Action,
+        glyph: &str,
+    ) -> (egui::Rect, egui::Color32, egui::Color32, egui::Color32) {
+        let id = super::super::action_customization::owner(surface).with(action);
+        let response = ctx.read_response(id).expect("transport action is registered");
+        assert_eq!(response.rect, response.interact_rect, "paint uses the full allocated hit target");
+        assert!(response.sense.senses_click() && response.sense.senses_drag());
+        let frame = output.shapes.iter().find_map(|shape| match &shape.shape {
+            egui::Shape::Rect(frame) if frame.rect == response.rect.shrink(0.5) => {
+                assert!(shape.clip_rect.contains_rect(frame.rect));
+                assert_eq!(frame.stroke.width, 1.0);
+                assert_eq!(frame.stroke_kind, egui::StrokeKind::Inside);
+                Some(frame)
+            }
+            _ => None,
+        }).expect("transport frame is painted");
+        let ink = output.shapes.iter().find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == glyph
+                && response.rect.contains(text.pos + text.galley.rect.center().to_vec2()) => {
+                let ink = text.galley.mesh_bounds.translate(text.pos.to_vec2());
+                assert!(response.rect.expand(0.5).contains_rect(ink), "glyph exceeds hit target: {ink:?}");
+                Some(text.override_text_color.unwrap_or(text.fallback_color))
+            }
+            _ => None,
+        }).expect("transport glyph is painted");
+        (response.rect, ink, frame.stroke.color, frame.fill)
+    }
+
+    #[test]
+    fn native_transport_paints_semantic_frames_without_changing_density_hit_targets() {
+        use crate::config::{AppConfig, ColorPalette, UiAnimationMode, UiControlDensity};
+        let _lock = crate::app::tests::lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.color_palette = ColorPalette::Studio;
+        app.duration = 12.0;
+        app.playback_time = 3.125;
+        app.is_seekable = true;
+        for surface in [Surface::Monitor, Surface::Simple] {
+            // Stop is an opt-in action in Simple.
+            app.control_bars.layout_mut(surface).hidden[Action::Stop as usize] = false;
+            for density in [UiControlDensity::ExtraCompact, UiControlDensity::Compact, UiControlDensity::Regular] {
+                for button_text in [None, Some(26.0)] {
+                    for rtl in [false, true] {
+                        app.rtl = rtl;
+                        app.current_video_path = Some("transport-fixture.mkv".into());
+                        app.is_paused = true;
+                        app.is_eof = false;
+                        app.is_muted = false;
+                        let ctx = egui::Context::default();
+                        ctx.set_theme(egui::Theme::Dark);
+                        crate::ui::configure_native_visuals(&ctx, &AppConfig {
+                            color_palette: ColorPalette::Studio,
+                            ui_control_density: density,
+                            ui_animation_mode: UiAnimationMode::Disabled,
+                            ..AppConfig::default()
+                        });
+                        if let Some(size) = button_text {
+                            ctx.all_styles_mut(|style| style.text_styles.get_mut(&egui::TextStyle::Button).unwrap().size = size);
+                        }
+                        render(&ctx, &mut app, surface, vec![]);
+                        let idle = render(&ctx, &mut app, surface, vec![]);
+                        let (bounds, idle_ink, idle_stroke, idle_fill) =
+                            transport_paint(&ctx, &idle, surface, Action::PlayPause, &caption(&app, Action::PlayPause));
+                        let tokens = crate::ui::craft_theme::current(&ctx);
+                        let green = crate::ui::palette::color(app.color_palette, true, "green");
+                        let amber = crate::ui::palette::color(app.color_palette, true, "amber");
+                        let red = crate::ui::palette::color(app.color_palette, true, "red");
+                        assert_ne!(idle_ink, green);
+                        assert_eq!(idle_stroke, tokens.field_border);
+                        assert_eq!(idle_fill, tokens.panel_bg.lerp_to_gamma(tokens.hover, 0.28));
+                        assert!((bounds.width() - bounds.height()).abs() <= 0.01);
+                        assert!(bounds.height() >= density.base_height());
+                        if button_text.is_none() {
+                            eprintln!("{surface:?} {density:?} rtl={rtl}: {}", bounds.height());
+                        } else {
+                            assert!(bounds.height() >= 26.0);
+                            eprintln!("{surface:?} {density:?} rtl={rtl} large text: {}", bounds.height());
+                        }
+                        let assert_intent = |output: &egui::FullOutput, app: &PealayerApp,
+                            action, expected_bounds, color, tint| {
+                            let actual = transport_paint(&ctx, output, surface, action, &caption(app, action));
+                            assert_eq!(actual, (expected_bounds, color,
+                                tokens.panel_bg.lerp_to_gamma(color, 0.68), tokens.panel_bg.lerp_to_gamma(color, tint)));
+                        };
+
+                        let play = bounds.center();
+                        let hover = render(&ctx, &mut app, surface, vec![egui::Event::PointerMoved(play)]);
+                        assert_intent(&hover, &app, Action::PlayPause, bounds, green, 0.17);
+                        let press = render(&ctx, &mut app, surface, vec![pointer(play, egui::PointerButton::Primary, true)]);
+                        assert_intent(&press, &app, Action::PlayPause, bounds, green, 0.24);
+                        // Cancel the activation without dispatching playback.
+                        let outside = egui::pos2(799.0, 599.0);
+                        render(&ctx, &mut app, surface, vec![egui::Event::PointerMoved(outside),
+                            pointer(outside, egui::PointerButton::Primary, false)]);
+                        let id = super::super::action_customization::owner(surface).with(Action::PlayPause);
+                        ctx.memory_mut(|mem| mem.request_focus(id));
+                        let focus = render(&ctx, &mut app, surface, vec![]);
+                        assert_intent(&focus, &app, Action::PlayPause, bounds, green, 0.12);
+                        assert!(focus.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Rect(r)
+                            if r.rect == bounds.shrink(2.5) && r.stroke.color == tokens.focus)));
+                        ctx.memory_mut(|mem| mem.surrender_focus(id));
+
+                        app.is_paused = false;
+                        app.is_muted = true;
+                        let active = render(&ctx, &mut app, surface, vec![]);
+                        assert_intent(&active, &app, Action::PlayPause, bounds, amber, 0.12);
+                        let mute = rect(&ctx, surface, Action::Mute);
+                        assert_intent(&active, &app, Action::Mute, mute, amber, 0.12);
+                        let stop = rect(&ctx, surface, Action::Stop);
+                        let hover_stop = render(&ctx, &mut app, surface, vec![egui::Event::PointerMoved(stop.center())]);
+                        assert_intent(&hover_stop, &app, Action::Stop, stop, red, 0.17);
+
+                        app.is_paused = true;
+                        app.is_eof = true;
+                        let replay = render(&ctx, &mut app, surface, vec![egui::Event::PointerMoved(play)]);
+                        assert_intent(&replay, &app, Action::PlayPause, bounds, green, 0.17);
+
+                        app.current_video_path = None;
+                        let disabled = render(&ctx, &mut app, surface, vec![egui::Event::PointerMoved(stop.center())]);
+                        let paint = transport_paint(&ctx, &disabled, surface, Action::Stop, &caption(&app, Action::Stop));
+                        assert_eq!(paint.0, stop);
+                        assert_eq!(paint.2, tokens.field_border.gamma_multiply(0.60));
+                        assert_eq!(paint.3, idle_fill.gamma_multiply(0.55));
+                        assert_ne!(paint.1, red);
+
+                        app.current_video_path = Some("transport-fixture.mkv".into());
+                        app.is_eof = false;
+                        configure_idle_backgrounds(&ctx, false);
+                        let transparent = render(&ctx, &mut app, surface, vec![egui::Event::PointerMoved(outside)]);
+                        let paint = transport_paint(&ctx, &transparent, surface, Action::PlayPause, &caption(&app, Action::PlayPause));
+                        assert_eq!(paint, (bounds, idle_ink, idle_stroke, egui::Color32::TRANSPARENT));
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn monitor_volume_moves_with_speaker_but_slider_gestures_do_not_reorder() {
         let _lock = crate::app::tests::lock_app_tests();

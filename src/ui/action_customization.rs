@@ -143,6 +143,39 @@ pub(crate) fn control(
     selected: bool,
     frame: bool,
 ) -> Response {
+    paint_control(ui, rect, id, caption, label, enabled, selected, frame, None)
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct TransportPaint {
+    pub intent: Option<egui::Color32>,
+    pub active: bool,
+    pub idle_backgrounds: bool,
+}
+
+pub(crate) fn transport_control(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    id: Id,
+    caption: &str,
+    label: &str,
+    enabled: bool,
+    paint: TransportPaint,
+) -> Response {
+    paint_control(ui, rect, id, caption, label, enabled, false, true, Some(paint))
+}
+
+fn paint_control(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    id: Id,
+    caption: &str,
+    label: &str,
+    enabled: bool,
+    selected: bool,
+    frame: bool,
+    transport: Option<TransportPaint>,
+) -> Response {
     let response = ui.interact(rect, id, egui::Sense::click_and_drag());
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
     let visuals = ui.style().interact_selectable(&response, selected);
@@ -172,10 +205,28 @@ pub(crate) fn control(
     } else {
         ui.visuals().widgets.inactive.text_color()
     };
-    let color = ui
-        .visuals()
-        .weak_text_color()
-        .lerp_to_gamma(available_ink, availability);
+    let color = ui.visuals().weak_text_color().lerp_to_gamma(available_ink, availability);
+    let (fill, stroke, color) = if let Some(paint) = transport {
+        let idle_fill = if paint.idle_backgrounds {
+            tokens.panel_bg.lerp_to_gamma(tokens.hover, 0.28)
+        } else {
+            egui::Color32::TRANSPARENT
+        };
+        if !enabled {
+            (idle_fill.gamma_multiply(0.55), egui::Stroke::new(1.0, tokens.field_border.gamma_multiply(0.60)),
+                ui.visuals().weak_text_color().gamma_multiply(0.72))
+        } else if let Some(intent) = paint.intent.filter(|_| paint.active || pressed || hovered || response.has_focus()) {
+            let tint = if pressed { 0.24 } else if hovered { 0.17 } else { 0.12 };
+            (tokens.panel_bg.lerp_to_gamma(intent, tint),
+                egui::Stroke::new(1.0, tokens.panel_bg.lerp_to_gamma(intent, 0.68)), intent)
+        } else if pressed || hovered {
+            (fill, stroke, color)
+        } else {
+            (idle_fill, btn_style.normal.stroke, color)
+        }
+    } else {
+        (fill, stroke, color)
+    };
     let button_rect = rect.shrink(if frame { 0.5 } else { 2.0 });
     ui.painter().rect(
         button_rect,
@@ -184,10 +235,16 @@ pub(crate) fn control(
         stroke,
         egui::StrokeKind::Inside,
     );
-    if response.has_focus() && !btn_style.focus_stroke.is_empty() {
+    if response.has_focus() && !btn_style.focus_stroke.is_empty()
+        && (transport.is_none() || enabled) {
+        let (focus_rect, radius) = if transport.is_some() {
+            (button_rect.shrink(2.0), egui::CornerRadius::same(2))
+        } else {
+            (button_rect, btn_style.corner_radius)
+        };
         ui.painter().rect_stroke(
-            button_rect,
-            btn_style.corner_radius,
+            focus_rect,
+            radius,
             btn_style.focus_stroke,
             egui::StrokeKind::Inside,
         );
