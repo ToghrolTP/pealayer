@@ -519,6 +519,8 @@ mod tests {
                     .any(|text| text.contains("Right side") && text.contains("79%"))
             );
             assert!(painted_text.contains(&"K4"));
+            assert!(painted_text.contains(&"Pealayer Cinema"));
+            assert!(painted_text.contains(&"Ready 4D Demo"));
             assert!(!painted_text.contains(&"PLAY"));
             discard_ui_output(output);
         }
