@@ -1,9 +1,9 @@
 //! Download Center shared by the player and standalone utility.
 use crate::{AddRequest, Engine, EngineSettings, Manager, PublicJob, Snapshot, State};
-use palette::controls::CheckboxUiExt;
+use palette::controls::{self, CheckboxUiExt};
 use egui::{self, Color32, RichText, Stroke, TextStyle, Vec2};
 use egui_phosphor::regular::{
-    ARROW_DOWN, ARROW_UP, CARET_DOWN, CHECK_CIRCLE, CLOCK, COPY, DOTS_THREE, DOWNLOAD_SIMPLE,
+    ARROW_DOWN, ARROW_UP, CHECK_CIRCLE, CLOCK, COPY, DOTS_THREE, DOWNLOAD_SIMPLE,
     GAUGE, GEAR, LINK, MAGNIFYING_GLASS, PAUSE, PLAY, PLUS, STOP, TRASH, WARNING,
 };
 use std::{path::PathBuf, sync::mpsc};
@@ -70,7 +70,7 @@ impl View {
 
         ui.horizontal_wrapped(|ui| {
             ui.label(icon(DOWNLOAD_SIMPLE).size(22.0).color(accent(ui)));
-            ui.heading("Download Center");
+            ui.heading(RichText::new("Download Center").size(20.0));
         });
         ui.horizontal_wrapped(|ui| {
             let completed = snapshot
@@ -177,17 +177,19 @@ impl View {
     ) -> Option<String> {
         panel(ui, |ui| {
             ui.strong("New download");
-            let enabled = !self.url.trim().is_empty();
+            let url_id = ui.make_persistent_id("download-url");
             let mut add = false;
             let mut compose = |ui: &mut egui::Ui, width: f32| {
-                let input = ui.add(
-                    egui::TextEdit::singleline(&mut self.url)
-                        .hint_text("Paste a file or media link")
-                        .desired_width(width.max(1.0)),
+                let input = input_with_icon(
+                    ui, url_id, &mut self.url, LINK, "Paste a file or media link", width,
                 );
-                let clicked = ui
-                    .add_enabled(enabled, primary(ui, PLUS, "Add download"))
-                    .clicked();
+                let enabled = !self.url.trim().is_empty();
+                let button = if enabled {
+                    primary(ui, PLUS, "Add download")
+                } else {
+                    egui::Button::new(action_caption(ui, PLUS, "Add download"))
+                };
+                let clicked = ui.add_enabled(enabled, button).clicked();
                 add = clicked
                     || (!self.url.trim().is_empty()
                         && input.lost_focus()
@@ -232,13 +234,7 @@ impl View {
                 egui::ComboBox::from_id_salt("download-engine")
                     .selected_text(engine_name(self.engine))
                     .icon(|ui, rect, visuals, _| {
-                        ui.painter().text(
-                            rect.center(),
-                            egui::Align2::CENTER_CENTER,
-                            CARET_DOWN,
-                            icon_font_id(ui, TextStyle::Small),
-                            visuals.text_color(),
-                        );
+                        controls::paint_chevron(ui, rect, visuals.text_color());
                     })
                     .show_ui(ui, |ui| {
                         for engine in snapshot
@@ -268,23 +264,9 @@ impl View {
                 ui.selectable_value(&mut self.filter, filter, label);
             }
         });
-        let search = ui.add(
-            egui::TextEdit::singleline(&mut self.search)
-                .hint_text("Filter by name or source")
-                .margin(egui::Margin {
-                    left: 26,
-                    right: 8,
-                    top: 4,
-                    bottom: 4,
-                })
-                .desired_width(ui.available_width()),
-        );
-        ui.painter().text(
-            search.rect.left_center() + egui::vec2(13.0, 0.0),
-            egui::Align2::CENTER_CENTER,
-            MAGNIFYING_GLASS,
-            icon_font_id(ui, TextStyle::Body),
-            ui.visuals().weak_text_color(),
+        input_with_icon(
+            ui, ui.make_persistent_id("download-search"), &mut self.search,
+            MAGNIFYING_GLASS, "Filter by name or source", ui.available_width(),
         );
         let query = self.search.trim().to_lowercase();
         let filter = self.filter;
@@ -480,7 +462,7 @@ impl View {
                 self.resolve_aria2(ui.ctx());
             }
             let input = ui.add(
-                egui::TextEdit::singleline(&mut self.aria2_executable)
+                controls::singleline_text_edit(ui, &mut self.aria2_executable).id_salt("aria2_executable")
                     .hint_text("aria2c")
                     .desired_width(ui.available_width()),
             );
@@ -550,11 +532,11 @@ impl View {
                     .unwrap_or_else(|| "http://127.0.0.1:6800/jsonrpc".into());
             }
             ui.add(
-                egui::TextEdit::singleline(&mut self.aria2_endpoint)
+                controls::singleline_text_edit(ui, &mut self.aria2_endpoint).id_salt("aria2_endpoint")
                     .desired_width(ui.available_width()),
             );
             ui.add(
-                egui::TextEdit::singleline(&mut self.aria2_secret)
+                controls::singleline_text_edit(ui, &mut self.aria2_secret).id_salt("aria2_secret")
                     .password(true)
                     .hint_text("RPC secret (optional)")
                     .desired_width(ui.available_width()),
@@ -616,6 +598,23 @@ impl View {
     }
 }
 
+fn input_with_icon(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    value: &mut String,
+    glyph: &str,
+    hint: &str,
+    width: f32,
+) -> egui::Response {
+    ui.add(
+        controls::singleline_text_edit(ui, value)
+            .id(id)
+            .prefix(icon(glyph).color(ui.visuals().weak_text_color()))
+            .hint_text(hint)
+            .desired_width(width.max(1.0)),
+    )
+}
+
 fn panel(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui)) {
     let visuals = ui.visuals();
     egui::Frame::new()
@@ -635,13 +634,6 @@ fn accent(ui: &egui::Ui) -> Color32 {
 
 fn icon(glyph: &str) -> RichText {
     RichText::new(glyph).family(egui::FontFamily::Name("phosphor".into()))
-}
-
-fn icon_font_id(ui: &egui::Ui, style: TextStyle) -> egui::FontId {
-    egui::FontId::new(
-        style.resolve(ui.style()).size,
-        egui::FontFamily::Name("phosphor".into()),
-    )
 }
 
 fn icon_caption(
@@ -778,6 +770,67 @@ mod tests {
             );
             output.textures_delta.clear();
         }
+        manager.shutdown(std::time::Duration::from_secs(2)).unwrap();
+        drop(manager);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn pointer_can_focus_url_and_type_into_download_center() {
+        let root = std::env::temp_dir().join(format!("pealayer-input-{}", uuid::Uuid::new_v4()));
+        let manager = Manager::open(root.clone()).unwrap();
+        let context = test_context();
+        let mut view = View::default();
+        context.options_mut(|options| options.max_passes = std::num::NonZeroUsize::MIN);
+        let mut time = 0.0;
+        let mut draw = |width, events| {
+            time += 0.02;
+            let mut output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 620.0))),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ui| { egui::CentralPanel::default().show(ui, |ui| { view.draw(ui, &manager); }); },
+            );
+            output.textures_delta.clear();
+            output.shapes
+        };
+        let shapes = draw(840.0, Vec::new());
+        let position = shapes.iter().find_map(|item| match &item.shape {
+            egui::Shape::Text(text) if text.galley.text() == "Paste a file or media link" =>
+                Some(text.pos + text.galley.rect.center().to_vec2()),
+            _ => None,
+        }).expect("URL input is painted");
+        assert!(position.is_finite(), "{position:?}");
+        let press = |pressed| egui::Event::PointerButton {
+            pos: position,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        draw(840.0, vec![egui::Event::PointerMoved(position), press(true)]);
+        draw(840.0, vec![press(false)]);
+        draw(400.0, vec![egui::Event::Text("https://example.invalid/media".into())]);
+        let shapes = draw(400.0, Vec::new());
+        let search = shapes.iter().find_map(|item| match &item.shape {
+            egui::Shape::Text(text) if text.galley.text() == "Filter by name or source" =>
+                Some(text.pos + text.galley.rect.center().to_vec2()),
+            _ => None,
+        }).expect("Search input is painted");
+        assert!(search.is_finite(), "{search:?}");
+        let search_press = |pressed| egui::Event::PointerButton {
+            pos: search,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        draw(400.0, vec![egui::Event::PointerMoved(search), search_press(true)]);
+        draw(400.0, vec![search_press(false)]);
+        draw(400.0, vec![egui::Event::Text("search query".into())]);
+        assert_eq!(view.url, "https://example.invalid/media");
+        assert_eq!(view.search, "search query");
         manager.shutdown(std::time::Duration::from_secs(2)).unwrap();
         drop(manager);
         std::fs::remove_dir_all(root).unwrap();

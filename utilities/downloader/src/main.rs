@@ -2,11 +2,16 @@
 mod appearance;
 mod icon;
 struct Downloader {
+    appearance: appearance::Appearance,
     manager: Result<pealayer_downloads::Manager, String>,
     view: pealayer_downloads::ui::View,
     error: Option<String>,
 }
 impl eframe::App for Downloader {
+    fn logic(&mut self, ctx: &eframe::egui::Context, frame: &mut eframe::Frame) {
+        self.appearance.sync(ctx, frame);
+    }
+
     fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
         if let Ok(manager) = &self.manager {
             let _ = manager.shutdown(std::time::Duration::from_secs(7));
@@ -107,8 +112,8 @@ fn main() -> eframe::Result {
         "Pealayer Downloader",
         options,
         Box::new(|creation| {
-            appearance::install(&creation.egui_ctx);
             Ok(Box::new(Downloader {
+                appearance: appearance::Appearance::new(&creation.egui_ctx),
                 manager: pealayer_downloads::default_root()
                     .and_then(pealayer_downloads::Manager::open),
                 view: Default::default(),

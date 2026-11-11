@@ -1270,7 +1270,7 @@ pub use system_accent::system_accent_color;
 fn decoration_colors(dark: bool, palette: crate::config::ColorPalette) -> (u32, u32) {
     let colorref = |role| {
         let color = crate::ui::palette::color(palette, dark, role);
-        u32::from(color.r()) | (u32::from(color.g()) << 8) | (u32::from(color.b()) << 16)
+        window_chrome::colorref([color.r(), color.g(), color.b()])
     };
     // Match the header's panel surface, including Studio's blue-gray tint.
     (colorref("surface-0"), colorref("text"))
@@ -1291,6 +1291,10 @@ pub fn apply_windows_window_decorations(hwnd_raw: isize) {
     );
 }
 
+#[cfg(any(target_os = "windows", test))]
+#[path = "../../shared/windows_chrome.rs"]
+mod window_chrome;
+
 #[cfg(target_os = "windows")]
 fn apply_windows_window_decorations_with(
     hwnd_raw: isize,
@@ -1299,75 +1303,8 @@ fn apply_windows_window_decorations_with(
     mica_backdrop: bool,
     palette: crate::config::ColorPalette,
 ) {
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::Graphics::Dwm::DWMWINDOWATTRIBUTE;
-    use windows::Win32::Graphics::Dwm::{
-        DWMSBT_MAINWINDOW, DWMSBT_NONE, DWMWA_CAPTION_COLOR, DWMWA_SYSTEMBACKDROP_TYPE,
-        DWMWA_TEXT_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute,
-    };
-    use windows::core::BOOL;
-
-    if hwnd_raw == 0 {
-        return;
-    }
-    let hwnd = HWND(hwnd_raw as *mut _);
     let (caption_color, text_color) = decoration_colors(dark, palette);
-
-    unsafe {
-        // 1. Enable immersive dark mode (attribute 20, fallback 19 for older Win10 builds)
-        let dark_mode = BOOL::from(dwm_theming && dark);
-        if DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_USE_IMMERSIVE_DARK_MODE,
-            &dark_mode as *const _ as *const _,
-            std::mem::size_of::<BOOL>() as u32,
-        )
-        .is_err()
-        {
-            let _ = DwmSetWindowAttribute(
-                hwnd,
-                DWMWINDOWATTRIBUTE(19),
-                &dark_mode as *const _ as *const _,
-                std::mem::size_of::<BOOL>() as u32,
-            );
-        }
-
-        // Pealayer presents an opaque OpenGL swapchain. Mica is optional because
-        // some drivers briefly expose the backdrop while swapping buffers.
-        let backdrop = if mica_backdrop {
-            DWMSBT_MAINWINDOW.0
-        } else {
-            DWMSBT_NONE.0
-        } as u32;
-        let _ = DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_SYSTEMBACKDROP_TYPE,
-            &backdrop as *const _ as *const _,
-            std::mem::size_of::<u32>() as u32,
-        );
-
-        // Keep native caption and text colors aligned with the app theme, or
-        // return them to the system-selected default when DWM theming is off.
-        let caption_color = if dwm_theming {
-            caption_color
-        } else {
-            0xFFFF_FFFF
-        };
-        let text_color = if dwm_theming { text_color } else { 0xFFFF_FFFF };
-        let _ = DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_CAPTION_COLOR,
-            &caption_color as *const _ as *const _,
-            std::mem::size_of::<u32>() as u32,
-        );
-
-        let _ = DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_TEXT_COLOR,
-            &text_color as *const _ as *const _,
-            std::mem::size_of::<u32>() as u32,
-        );
-    }
+    window_chrome::apply(hwnd_raw, dark, dwm_theming, mica_backdrop, caption_color, text_color);
 }
 
 #[cfg(not(target_os = "windows"))]

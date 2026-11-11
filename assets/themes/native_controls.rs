@@ -3,17 +3,46 @@ use super::egui::{
     Role, Sense, Shadow, Shape, Stroke, StrokeKind, Vec2, Widget, WidgetAtom, WidgetInfo,
     class::HasClasses as _,
     theme::{DefaultStyle, StyleProvider},
-    widget_style::{ButtonStyle, CheckboxStyle, StyleArgs, WidgetState},
+    widget_style::{ButtonStyle, CheckboxStyle, StyleArgs, TextEditStyle, WidgetState},
 };
 
 const PASTEL_CONTROLS: &str = "pealayer-pastel-controls";
 
 pub fn configure(ctx: &egui::Context, pastel: bool) {
     ctx.data_mut(|data| data.insert_temp(Id::unique(PASTEL_CONTROLS), pastel));
+    ctx.add_widget_theme::<TextEditStyle>(DesktopTextEdits);
     if pastel {
         ctx.add_widget_theme::<ButtonStyle>(PastelButtons);
     } else {
         ctx.add_widget_theme::<ButtonStyle>(DefaultStyle);
+    }
+}
+
+struct DesktopTextEdits;
+
+impl StyleProvider<TextEditStyle> for DesktopTextEdits {
+    fn style(&mut self, args: &StyleArgs<'_>) -> TextEditStyle {
+        let mut style: TextEditStyle = DefaultStyle.style(args);
+        if args.state == WidgetState::Active
+            && !args.classes.has_class(&egui::TextEdit::CLASS_READ_ONLY)
+        {
+            let visuals = &args.style.visuals;
+            let accent = visuals.selection.bg_fill;
+            let luminance = |color: Color32| {
+                let rgb = egui::Rgba::from(color);
+                0.2126 * rgb.r() + 0.7152 * rgb.g() + 0.0722 * rgb.b()
+            };
+            let a = luminance(accent);
+            let b = luminance(visuals.text_edit_bg_color());
+            // The selected-text foreground can be white on a light canvas.
+            // Use the accent for focus when it meets non-text contrast.
+            style.atom_layout.frame.stroke.color = if (a.max(b) + 0.05) / (a.min(b) + 0.05) >= 3.0 {
+                accent
+            } else {
+                visuals.text_color()
+            };
+        }
+        style
     }
 }
 
@@ -271,4 +300,27 @@ mod tests {
             }
         }
     }
+}
+
+pub fn height(ui: &egui::Ui) -> f32 {
+    // Allow large/accessibility fonts to grow every control together.
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let line = ui.painter().layout_no_wrap("Ag".into(), font, egui::Color32::WHITE).size().y;
+    ui.spacing().interact_size.y.max(line.max(ui.spacing().icon_width) + ui.spacing().button_padding.y * 2.0)
+}
+
+pub fn paint_chevron(ui: &egui::Ui, rect: egui::Rect, color: egui::Color32) {
+    // An open chevron, rather than mixing a filled triangle and a font glyph.
+    let center = rect.center();
+    ui.painter().with_clip_rect(ui.clip_rect().intersect(rect)).add(egui::Shape::line(vec![
+        center + egui::vec2(-4.0, -2.0), center + egui::vec2(0.0, 2.0), center + egui::vec2(4.0, -2.0),
+    ], egui::Stroke::new(1.5, color)));
+}
+
+/// Single-line input text stays centered when its row supplies extra height.
+/// Multiline/wrapped editors intentionally keep TextEdit's top alignment.
+pub fn singleline_text_edit<'a>(ui: &egui::Ui, text: &'a mut dyn egui::TextBuffer) -> egui::TextEdit<'a> {
+    egui::TextEdit::singleline(text).align(egui::Align2::LEFT_CENTER)
+        .font(egui::TextStyle::Button).margin(egui::Margin::symmetric(4, 0))
+        .min_size(egui::vec2(0.0, height(ui)))
 }

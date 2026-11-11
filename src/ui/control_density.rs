@@ -9,20 +9,7 @@ pub fn configure(style: &mut egui::Style, density: UiControlDensity) {
     super::palette::native::configure_density(style, density.base_height());
 }
 
-pub fn height(ui: &egui::Ui) -> f32 {
-    // Allow large/accessibility fonts to grow every control together.
-    let font = egui::TextStyle::Button.resolve(ui.style());
-    let line = ui.painter().layout_no_wrap("Ag".into(), font, egui::Color32::WHITE).size().y;
-    ui.spacing().interact_size.y.max(line.max(ui.spacing().icon_width) + ui.spacing().button_padding.y * 2.0)
-}
-
-pub fn paint_chevron(ui: &egui::Ui, rect: egui::Rect, color: egui::Color32) {
-    // An open chevron, rather than mixing a filled triangle and a font glyph.
-    let center = rect.center();
-    ui.painter().with_clip_rect(ui.clip_rect().intersect(rect)).add(egui::Shape::line(vec![
-        center + egui::vec2(-4.0, -2.0), center + egui::vec2(0.0, 2.0), center + egui::vec2(4.0, -2.0),
-    ], egui::Stroke::new(1.5, color)));
-}
+pub use super::palette::native::controls::{height, paint_chevron};
 
 /// Discrete choices retain egui's pointer, keyboard and accessibility behavior.
 /// The value capsule reserves the widest translated label, never the active one.
