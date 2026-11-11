@@ -61,7 +61,9 @@ for (const release of history.releases) {
     const bytes = readFileSync(file);
     assert.equal(createHash('sha256').update(bytes).digest('hex'), shot.sha256, `Screenshot changed: ${shot.path}`);
     assert(notes.includes(shot.immutableUrl), `Missing rendered image ${shot.path}`);
-    assert.equal(shot.immutableUrl, `https://raw.githubusercontent.com/ToghrolTP/pealayer/${history.imageCommit}/${shot.path}`);
+    const imageCommit = shot.imageCommit ?? history.imageCommit;
+    assert.match(imageCommit, /^[a-f0-9]{40}$/);
+    assert.equal(shot.immutableUrl, `https://raw.githubusercontent.com/ToghrolTP/pealayer/${imageCommit}/${shot.path}`);
     assert(existsSync(resolve(root, shot.evidence)), `Missing image provenance ${shot.evidence}`);
     ancestor(shot.sourceSha, release.sha);
     images++;

@@ -622,11 +622,9 @@ pealayer/
 
 ## Continuous Integration & Automated Releases
 
-Pealayer includes a multi-platform [GitHub Actions CI/CD Pipeline](.github/workflows/ci-cd.yml):
-* **Automated Matrix Testing**: Runs `cargo test --locked` on both Ubuntu Linux and Windows environments for every pull request and push.
-* **Dynamic Dependency Resolution**: Windows CI fetches the latest official x86_64 `libmpv` releases, builds with MinGW, and automatically pairs the runtime DLL.
-* **Standalone Release Packaging**: Generates ready-to-run `.tar.gz` (Linux) and `.zip` (Windows) bundles containing the executable, documentation, licenses, and pre-compiled Web UI assets.
-* **Automated Release Publishing**: Pushing a version tag (e.g. `git tag v0.1.0 && git push --tags`) automatically publishes official GitHub Releases.
+The [GitHub Actions workflow](.github/workflows/ci-cd.yml) tests and packages Pealayer for Windows x86-64, Linux x86-64, macOS Apple silicon and macOS Intel. Windows packages include the verified libmpv runtime.
+
+For a major checkpoint, add curated release notes and push its semantic version tag. The workflow publishes the [GitHub release](https://github.com/ToghrolTP/pealayer/releases) with archive checksums and build attestations after the matrix passes. See the [milestone publication policy](docs/releases/next.md).
 
 ---
 

@@ -3,7 +3,7 @@
   "repository": "ToghrolTP/pealayer",
   "backfilledOn": "2026-11-10",
   "imageCommit": "1e171e8bbd66348d00f9742704c5b78b006f6faf",
-  "currentPinnedSource": "0cde16fd5d59e6068d43f81e55b0c2e0f35aca7e",
+  "currentPinnedSource": "49e78c6df791e328fb1e6e4ab72f34cdc27ceb1f",
   "releases": [
     {
       "tag": "v0.1.0",
@@ -2579,6 +2579,306 @@
         }
       ],
       "emoji": "🧰"
+    },
+    {
+      "tag": "v0.12.0-alpha.2",
+      "sha": "49e78c6df791e328fb1e6e4ab72f34cdc27ceb1f",
+      "title": "Projects, Virtual Board and native playback",
+      "date": "2026-11-11T20:38:42+03:30",
+      "previousSha": "0cde16fd5d59e6068d43f81e55b0c2e0f35aca7e",
+      "commitCount": 233,
+      "prs": [
+        {
+          "number": 227,
+          "title": "Save and restore projects, timelines and hardware scenes",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/227",
+          "mergeCommit": "b34ab80412d14c0aa4bd08e31e84363743dde32d"
+        },
+        {
+          "number": 248,
+          "title": "Restore FilmCraft monitor design and working preview controls",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/248",
+          "mergeCommit": "0c188068befff18d0247a2ecc8036e686b603b0b"
+        },
+        {
+          "number": 277,
+          "title": "Complete command toolbar drag-to-hide, palette sizing and button states",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/277",
+          "mergeCommit": "111e0bf7d33e09845dbd0094f12e3208bb1178fd"
+        },
+        {
+          "number": 278,
+          "title": "Align FPS icon and numbers with proportional tabular status typography",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/278",
+          "mergeCommit": "49128d34539d7c87bc66e72fdd79dd03a049bbb8"
+        },
+        {
+          "number": 279,
+          "title": "Backfill versioned releases, screenshots, changelogs and known build problems",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/279",
+          "mergeCommit": "1882b4743f36a73e868052585a30707bddbecbe6"
+        },
+        {
+          "number": 280,
+          "title": "Restore emoji polish across all releases and future release notes",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/280",
+          "mergeCommit": "7547b976871760f72bc5a56d12e0b235716eab1e"
+        },
+        {
+          "number": 281,
+          "title": "Polish Terminal tabs and embed shared, paired PortableShell controls",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/281",
+          "mergeCommit": "46939af4a5046ff6d04032fa0e8b1f39ed6e47a3"
+        },
+        {
+          "number": 294,
+          "title": "Refresh the Download Center and aria2 discovery",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/294",
+          "mergeCommit": "ac0aa5a6cf8acea52201ed2cae0b73b5d10a1796"
+        },
+        {
+          "number": 295,
+          "title": "Restore the Virtual Board Demo with current PCController firmware",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/295",
+          "mergeCommit": "f7a762d588615ea16ade3c269686fafb6e67ea14"
+        },
+        {
+          "number": 296,
+          "title": "Add the Pastel color palette for desktop and Web",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/296",
+          "mergeCommit": "ee4b672de28cf403cfbbc66c638fd46ba23c3944"
+        },
+        {
+          "number": 297,
+          "title": "Give Pastel buttons and checkboxes raised surfaces",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/297",
+          "mergeCommit": "1c390ea4c34c0e9b1b50ce2ae5626eb4c94c6231"
+        },
+        {
+          "number": 298,
+          "title": "Align the status bar FPS value and unit",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/298",
+          "mergeCommit": "5149359ffdb440e2173b0cd364196fbb4eb1d3bb"
+        },
+        {
+          "number": 299,
+          "title": "Keep live streams live and warn when board capture overflows",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/299",
+          "mergeCommit": "7e857a094a0f9e11195b4042c94bd0c81b3ed760"
+        },
+        {
+          "number": 300,
+          "title": "Coordinate video double-click and fast-forward hold timing",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/300",
+          "mergeCommit": "9a1e2e9a76ab008b39d7a473e4ecd2e8bac03e22"
+        },
+        {
+          "number": 301,
+          "title": "Reconcile the unified control-port checkpoint",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/301",
+          "mergeCommit": "4e8e4a9168a3e0fad9686383a95ec95958c65d5c"
+        },
+        {
+          "number": 302,
+          "title": "Reconcile the exact Windows readiness stash",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/302",
+          "mergeCommit": "f47783e7bac1f7cd4071f7274f3a96e492e17a68"
+        },
+        {
+          "number": 303,
+          "title": "Reconcile the Windows readiness source review",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/303",
+          "mergeCommit": "e0f64bc58d7f78ad530a99bfe2a9474090a0d021"
+        },
+        {
+          "number": 304,
+          "title": "Restore the live recording checkpoint",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/304",
+          "mergeCommit": "9069b51df99281401cccd0c087757f8176ce1a07"
+        },
+        {
+          "number": 305,
+          "title": "Restore the remote live-media branch",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/305",
+          "mergeCommit": "e1b1c47634c3066280939309f39bda44097099cc"
+        },
+        {
+          "number": 306,
+          "title": "Restore the DirectComposition video renderer for Windows",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/306",
+          "mergeCommit": "d05bd006eaba22fda80576d01821b9491a0702ed"
+        },
+        {
+          "number": 307,
+          "title": "Share Pealayer native styling and stable input focus with Downloader",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/307",
+          "mergeCommit": "9a347c34107fc370f1e7d376519c2bb885df9b94"
+        },
+        {
+          "number": 308,
+          "title": "Reduce native window flicker while seeking",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/308",
+          "mergeCommit": "788eec1e51254af10318fba503253de62c8b1052"
+        },
+        {
+          "number": 309,
+          "title": "Add advanced workspace panel appearance tweaks",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/309",
+          "mergeCommit": "078bdbad69e81f947e4eef179aba9228d3858e9f"
+        },
+        {
+          "number": 310,
+          "title": "Keep elapsed and duration timecodes compact while editing",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/310",
+          "mergeCommit": "7f00b48832ca93595ed3d14c04be4f8b9c38b1bb"
+        },
+        {
+          "number": 311,
+          "title": "Keep Virtual Board relay cards in sync",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/311",
+          "mergeCommit": "465d6c33111faad7b3c781bddc2631f4f291a694"
+        },
+        {
+          "number": 312,
+          "title": "Fit duration and use tabular playback timestamps",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/312",
+          "mergeCommit": "5a60afae1212b99df96cbfa1a49b1c547eeaebbc"
+        },
+        {
+          "number": 313,
+          "title": "Run Virtual Board through the real controller and firmware paths",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/313",
+          "mergeCommit": "10a793e8d6d278228e82fe48b42f7e886952a52c"
+        },
+        {
+          "number": 314,
+          "title": "Fit elapsed time and restore volume actions",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/314",
+          "mergeCommit": "84ef205fa4b1d187dd0cf5f1cd91c3061dee2458"
+        },
+        {
+          "number": 315,
+          "title": "Restore semantic frames in the native transport",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/315",
+          "mergeCommit": "cda2fd7212b615458df2822f9a0344c38a0bb63b"
+        }
+      ],
+      "previousTag": "v0.11.0-alpha.1",
+      "prerelease": true,
+      "notes": "docs/releases/v0.12.0-alpha.2.md",
+      "summary": "Project and scene persistence, firmware-backed Virtual Board, optional FilmCraft, shared terminal and native playback fixes.",
+      "issues": [
+        80,
+        226,
+        292
+      ],
+      "packages": [
+        {
+          "file": "Pealayer-linux-x86_64-v0.12.0-alpha.2-49e78c6.tar.gz",
+          "size": 39670425,
+          "sha256": "d48135cbdda5b5f773220fcb49d2e0f53e447207e0a9303aabc1a483c4f8f5d6",
+          "sourceSha": "49e78c6df791e328fb1e6e4ab72f34cdc27ceb1f"
+        },
+        {
+          "file": "Pealayer-macos-aarch64-v0.12.0-alpha.2-49e78c6.zip",
+          "size": 34705202,
+          "sha256": "2573cd37e20991ba1e95c654a093eda9e65952d2051754e369787589edf9be95",
+          "sourceSha": "49e78c6df791e328fb1e6e4ab72f34cdc27ceb1f"
+        },
+        {
+          "file": "Pealayer-macos-x86_64-v0.12.0-alpha.2-49e78c6.zip",
+          "size": 36217679,
+          "sha256": "7145158fdbbf07c3c9a67aa76f3a5774f229075cbca85762a870e657d0db60e9",
+          "sourceSha": "49e78c6df791e328fb1e6e4ab72f34cdc27ceb1f"
+        },
+        {
+          "file": "Pealayer-windows-x86_64-v0.12.0-alpha.2-49e78c6.zip",
+          "size": 79240554,
+          "sha256": "90d9b8197b0a8d3d7375d1e7d20fc52e09720cf090f786cb8e8aef2bdacf73a4",
+          "sourceSha": "49e78c6df791e328fb1e6e4ab72f34cdc27ceb1f"
+        }
+      ],
+      "runs": [
+        {
+          "id": 43065265627,
+          "url": "https://github.com/ToghrolTP/pealayer/actions/runs/43065265627",
+          "conclusion": "failure",
+          "jobs": [
+            {
+              "name": "🛡️ Repository health · Web UI",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🪟 Windows · x86-64",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🐧 Linux · x86-64",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🍎 macOS · Apple silicon",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🍎 macOS · Intel",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "✨ Release · Attested packages",
+              "conclusion": "failure",
+              "failedSteps": [
+                "🚀 Create or update GitHub release"
+              ]
+            },
+            {
+              "name": "🚦 Pealayer · Complete",
+              "conclusion": "failure",
+              "failedSteps": [
+                "📋 Publish consolidated CI/CD summary"
+              ]
+            }
+          ]
+        }
+      ],
+      "screenshots": [
+        {
+          "path": "docs/screenshots/virtual-board-twin-2d.png",
+          "caption": "Virtual firmware LCD, controls and live 2D seat positions.",
+          "evidence": "docs/verification/virtual-board-parity.md",
+          "sourceSha": "f227c2822e745aecf9f32eba0783790ea7df5b15",
+          "imageCommit": "0a9240f6c8f2ffdfbd87da0332cbf7e58c100538",
+          "sha256": "8b3bd9235a317d02342c46126d4aefe127fff0c35d59ca27aec8927c12a1ca6c",
+          "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/0a9240f6c8f2ffdfbd87da0332cbf7e58c100538/docs/screenshots/virtual-board-twin-2d.png",
+          "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/0a9240f6c8f2ffdfbd87da0332cbf7e58c100538/docs/verification/virtual-board-parity.md"
+        },
+        {
+          "path": "docs/screenshots/virtual-board-twin-3d.png",
+          "caption": "Virtual Board 3D seat view with both banks visible.",
+          "evidence": "docs/verification/virtual-board-parity.md",
+          "sourceSha": "f227c2822e745aecf9f32eba0783790ea7df5b15",
+          "imageCommit": "0a9240f6c8f2ffdfbd87da0332cbf7e58c100538",
+          "sha256": "e7e46126f530142a7ddbd8c48f0f071dc6ec3a7003f934feb12d26205ca8c53e",
+          "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/0a9240f6c8f2ffdfbd87da0332cbf7e58c100538/docs/screenshots/virtual-board-twin-3d.png",
+          "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/0a9240f6c8f2ffdfbd87da0332cbf7e58c100538/docs/verification/virtual-board-parity.md"
+        },
+        {
+          "path": "docs/screenshots/semantic-transport/after-pause.png",
+          "caption": "Active Pause in a matched native transport comparison.",
+          "evidence": "docs/verification/semantic-transport.md",
+          "sourceSha": "76973b1787b7344b4f9114efed3a22c2bff04536",
+          "imageCommit": "6a44d5ebd7b7258a6554275cee8c6815248d3df7",
+          "sha256": "e231b1eba952a401685f880a4a1c5ff9ffd0e912cb16ff52a3514059d739d142",
+          "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/6a44d5ebd7b7258a6554275cee8c6815248d3df7/docs/screenshots/semantic-transport/after-pause.png",
+          "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/6a44d5ebd7b7258a6554275cee8c6815248d3df7/docs/verification/semantic-transport.md"
+        }
+      ],
+      "emoji": "🎞️"
     }
   ]
 }

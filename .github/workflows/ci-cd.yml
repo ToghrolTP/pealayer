@@ -377,7 +377,7 @@ jobs:
             { echo "tag=$GITHUB_REF_NAME"; echo "name=$name"; echo "prerelease=$prerelease"; } >> "$GITHUB_OUTPUT"
           else
             safe="${GITHUB_REF_NAME//\//-}"
-            { echo "tag=branch-$safe"; echo "name=🧪 Pealayer branch build ($safe)"; echo 'prerelease=true'; } >> "$GITHUB_OUTPUT"
+            { echo "tag=branch-$safe"; echo "name=🧪 Pealayer branch build ($safe)"; echo 'prerelease=true'; echo "target_commitish=$GITHUB_SHA"; } >> "$GITHUB_OUTPUT"
           fi
       - name: "📝 Generate release notes, manifest, and checksums"
         env:
@@ -412,11 +412,19 @@ jobs:
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
           subject-path: release-assets/*
+      - name: "📤 Preserve verified release assets"
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: attested-release-assets
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
       - name: "🚀 Create or update GitHub release"
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
-          target_commitish: ${{ github.sha }}
+          target_commitish: ${{ steps.meta.outputs.target_commitish }}
           name: ${{ steps.meta.outputs.name }}
           prerelease: ${{ steps.meta.outputs.prerelease }}
           body_path: release-assets/RELEASE-NOTES.md

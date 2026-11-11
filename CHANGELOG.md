@@ -4,10 +4,20 @@ Versioned history replaces the former single unreleased list. [Read the chronolo
 
 ## 🚧 Unreleased
 
-- Command palette/toolbar sizing, disabled paint and drag-to-hide completion: [#277](https://github.com/ToghrolTP/pealayer/pull/277).
-- Proportional/tabular FPS digit alignment: [#278](https://github.com/ToghrolTP/pealayer/pull/278).
-- Full projects/scenes: [#226](https://github.com/ToghrolTP/pealayer/issues/226), draft [#227](https://github.com/ToghrolTP/pealayer/pull/227).
-- Optional FilmCraft monitor and timeline styling, with the Compact and Standard options retained ([#248](https://github.com/ToghrolTP/pealayer/pull/248)).
+[How we publish major checkpoints](docs/releases/next.md)
+
+## 🎞️ v0.12.0-alpha.2 — Projects, Virtual Board and native playback
+
+**2026-11-11** · [GitHub release](https://github.com/ToghrolTP/pealayer/releases/tag/v0.12.0-alpha.2)
+
+- ✨ **[Added]** Save and restore projects, scenes and timelines. Choose FilmCraft, Compact or Standard monitor presentation. [#227](https://github.com/ToghrolTP/pealayer/pull/227) · [#248](https://github.com/ToghrolTP/pealayer/pull/248)
+- ✨ **[Added]** Use shared native and Web terminal sessions with paired access and explicit execution permissions. [#281](https://github.com/ToghrolTP/pealayer/pull/281)
+- 🛠️ **[Fixed]** Reduce flicker when seeking and restore semantic transport styling. Fit tabular elapsed and duration values, restore volume actions and align the status bar FPS value and unit. [#298](https://github.com/ToghrolTP/pealayer/pull/298) · [#308](https://github.com/ToghrolTP/pealayer/pull/308) · [#314](https://github.com/ToghrolTP/pealayer/pull/314) · [#315](https://github.com/ToghrolTP/pealayer/pull/315)
+- 🛠️ **[Fixed]** Size the command palette to its content and improve the toolbar's drag-to-hide interaction and disabled states. [#277](https://github.com/ToghrolTP/pealayer/pull/277)
+- 🧪 **[Experimental]** Run the firmware-backed Virtual Board with live relay, front-panel and seat feedback. The PCController and Virtual Board executables are separate companions. [#311](https://github.com/ToghrolTP/pealayer/pull/311) · [#313](https://github.com/ToghrolTP/pealayer/pull/313)
+- 🐞 **[Known issue]** Under heavy concurrent compilation, the demo may pause when the hardware timing guard detects a late controller read. [Verification record](docs/verification/virtual-board-parity.md)
+
+[📖 Complete notes, screenshots, packages and included PRs](docs/releases/v0.12.0-alpha.2.md)
 
 ### ⬇️ Download Center
 
