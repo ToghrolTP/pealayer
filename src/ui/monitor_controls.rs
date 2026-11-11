@@ -572,10 +572,26 @@ mod tests {
     fn actual_monitor_overflow_opens_after_reflow_and_in_rtl() {
         let _lock=crate::app::tests::lock_app_tests();
         for presentation in [crate::config::NativeMonitorStyle::Compact, crate::config::NativeMonitorStyle::FilmCraft] {
-        for width in [260.0,400.0,700.0,1400.0] {
+        for (width, density, large) in [
+            (260.0, crate::config::UiControlDensity::Regular, true),
+            (400.0, crate::config::UiControlDensity::Compact, false),
+            (700.0, crate::config::UiControlDensity::ExtraCompact, false),
+            (1400.0, crate::config::UiControlDensity::Regular, true),
+        ] {
             for rtl in [false,true] {
+                use crate::config::ControlBarAction as Action;
                 let ctx=egui::Context::default(); let mut app=PealayerApp::default(); app.rtl=rtl;
                 app.native_monitor_style = presentation;
+                app.current_video_path = Some("transport-fixture.mkv".into());
+                app.duration = 12.0;
+                app.is_seekable = true;
+                crate::ui::configure_native_visuals(&ctx, &crate::config::AppConfig {
+                    ui_control_density: density,
+                    ..Default::default()
+                });
+                if large {
+                    ctx.all_styles_mut(|style| style.text_styles.get_mut(&egui::TextStyle::Button).unwrap().size = 26.0);
+                }
                 let owner=std::cell::Cell::new(egui::Id::NULL);
                 let mut render=|app:&mut PealayerApp,events| {
                     let mut output=ctx.run_ui(egui::RawInput {
@@ -585,7 +601,24 @@ mod tests {
                         let metrics=Metrics::measure(app,ui); draw(app,ui,metrics);
                     }); output.textures_delta.clear(); output
                 };
-                render(&mut app,vec![]); render(&mut app,vec![]);
+                render(&mut app,vec![]);
+                let painted = render(&mut app,vec![]);
+                let overflow = [false, true].into_iter().flat_map(|end| ctx.data(|data| {
+                    data.get_temp::<Vec<Action>>(owner.get().with(("overflow-actions", end))).unwrap_or_default()
+                })).collect::<Vec<_>>();
+                if width == 260.0 {
+                    assert!(overflow.contains(&Action::Mute), "large volume group must overflow at {width}");
+                }
+                for action in [Action::PlayPause, Action::Stop, Action::Back, Action::Forward, Action::Mute] {
+                    if let Some(button) = ctx.read_response(owner.get().with(action)) {
+                        assert_eq!(button.interact_rect, button.rect, "{action:?} clipped at {width}, rtl={rtl}");
+                        assert!(button.rect.left() >= 0.0 && button.rect.right() <= width + 0.5);
+                        assert!(painted.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Rect(frame)
+                            if frame.rect == button.rect.shrink(0.5) && shape.clip_rect.contains_rect(frame.rect))));
+                    } else {
+                        assert!(overflow.contains(&action), "{action:?} disappeared at {width}, rtl={rtl}");
+                    }
+                }
                 // Match the same root UI used by the production draw call.
                 let pos=ctx.read_response(owner.get().with("overflow")).unwrap().rect.center();
                 let pointer=|pressed|egui::Event::PointerButton {pos,button:egui::PointerButton::Primary,pressed,modifiers:Default::default()};

@@ -67,6 +67,7 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Program Monitor controls" => "کنترل‌های نمایشگر برنامه",
         "Timeline ruler" => "خط‌کش خط زمان",
         "Workspace panels" => "پنل‌های فضای کاری",
+        "Show idle transport button backgrounds" => "نمایش پس‌زمینهٔ دکمه‌های پخش در حالت عادی",
         "Advanced tweaks" => "تنظیمات پیشرفتهٔ ظاهر",
         "Swap panel and tab colors" => "جابه‌جایی رنگ پنل و زبانه",
         "Round panel tab headers" => "گرد کردن گوشه‌های زبانه‌های پنل",

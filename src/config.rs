@@ -1218,6 +1218,7 @@ pub struct AppConfig {
     pub craft_show_collapse_buttons: bool,
     pub egui_dock_show_collapse_buttons: bool,
     pub workspace_swap_panel_colors: bool,
+    pub transport_idle_backgrounds: bool,
     pub workspace_round_panel_tabs: bool,
     pub preferences_grouped_navigation: bool,
     pub language: AppLanguage,
@@ -1449,6 +1450,7 @@ impl Default for AppConfig {
             craft_show_collapse_buttons: false,
             egui_dock_show_collapse_buttons: true,
             workspace_swap_panel_colors: false,
+            transport_idle_backgrounds: true,
             workspace_round_panel_tabs: false,
             preferences_grouped_navigation: true,
             language: AppLanguage::System,
@@ -1905,6 +1907,7 @@ impl AppConfig {
         self.craft_show_collapse_buttons = source.craft_show_collapse_buttons;
         self.egui_dock_show_collapse_buttons = source.egui_dock_show_collapse_buttons;
         self.workspace_swap_panel_colors = source.workspace_swap_panel_colors;
+        self.transport_idle_backgrounds = source.transport_idle_backgrounds;
         self.workspace_round_panel_tabs = source.workspace_round_panel_tabs;
         self.preferences_grouped_navigation = source.preferences_grouped_navigation;
         self.app_icon_preset = source.app_icon_preset;
