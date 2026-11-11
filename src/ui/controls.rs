@@ -492,7 +492,12 @@ pub fn draw_contextual_transport_nudge(
 
 pub fn begin_elapsed_edit(app: &mut PealayerApp) {
     let elapsed = resolve_display_time(app.seek_pos, app.playback_time);
-    app.elapsed_time_input = format_elapsed_edit_time(elapsed);
+    let elapsed = if elapsed.is_finite() {
+        elapsed.clamp(0.0, 359_999.999)
+    } else {
+        0.0
+    };
+    app.elapsed_time_input = format_transport_time(elapsed, app.duration, app.show_subseconds);
     app.elapsed_time_original = app.elapsed_time_input.clone();
     app.elapsed_time_group = 0;
     app.elapsed_time_group_digits = 0;
@@ -501,11 +506,6 @@ pub fn begin_elapsed_edit(app: &mut PealayerApp) {
 }
 
 const ELAPSED_AUTOMATIC_ADVANCE: usize = usize::MAX;
-
-fn format_elapsed_edit_time(seconds: f64) -> String {
-    let seconds = if seconds.is_finite() { seconds.clamp(0.0, 359_999.999) } else { 0.0 };
-    format_player_time(seconds, true, true)
-}
 
 fn normalize_timecode_digits(text: &str) -> String {
     text.chars().map(|character| match character {
@@ -555,12 +555,28 @@ fn timecode_group_at_cursor(value: &str, index: usize) -> usize {
 
 /// A segment editor never inserts or deletes punctuation: every edit replaces
 /// digits inside an existing group, and a completed group advances itself.
-fn edit_timecode_segment(value: &mut String, group: &mut usize, digits: &mut usize, event: &egui::Event) {
+fn edit_timecode_segment(
+    value: &mut String,
+    group: &mut usize,
+    digits: &mut usize,
+    duration: f64,
+    event: &egui::Event,
+) {
     let groups = timecode_groups(value);
     if groups.is_empty() {
         return;
     }
     *group = (*group).min(groups.len() - 1);
+    let maximum = |value: &str, index: usize| {
+        let start = groups[index].start;
+        if start > 0 && value.as_bytes()[start - 1] == b'.' {
+            999
+        } else if index == 0 && value.bytes().filter(|byte| *byte == b':').count() == 2 {
+            99
+        } else {
+            59
+        }
+    };
     match event {
         egui::Event::Key { key: egui::Key::ArrowLeft, pressed: true, .. } => {
             *group = group.saturating_sub(1);
@@ -597,7 +613,7 @@ fn edit_timecode_segment(value: &mut String, group: &mut usize, digits: &mut usi
         }
         egui::Event::Key { key: key @ (egui::Key::ArrowUp | egui::Key::ArrowDown), pressed: true, .. } => {
             let range = groups[*group].clone();
-            let maximum = if *group == groups.len() - 1 { 999 } else if groups.len() == 4 && *group == 0 { 99 } else { 59 };
+            let maximum = maximum(value, *group);
             let previous = value[range.clone()].parse::<u32>().unwrap_or(0);
             let next = if *key == egui::Key::ArrowUp { (previous + 1).min(maximum) } else { previous.saturating_sub(1) };
             value.replace_range(range.clone(), &format!("{next:0width$}", width = range.len()));
@@ -620,7 +636,7 @@ fn edit_timecode_segment(value: &mut String, group: &mut usize, digits: &mut usi
                 let range = groups[*group].clone();
                 if *digits == ELAPSED_AUTOMATIC_ADVANCE || *digits >= range.len() { *digits = 0; }
                 let previous = if *digits == 0 { 0 } else { value[range.clone()].parse::<u32>().unwrap_or(0) };
-                let maximum = if *group == groups.len() - 1 { 999 } else if groups.len() == 4 && *group == 0 { 99 } else { 59 };
+                let maximum = maximum(value, *group);
                 let next = (previous * 10 + digit).min(maximum);
                 value.replace_range(range.clone(), &format!("{next:0width$}", width = range.len()));
                 *digits += 1;
@@ -632,8 +648,10 @@ fn edit_timecode_segment(value: &mut String, group: &mut usize, digits: &mut usi
         }
         egui::Event::Paste(text) => {
             if let Some(seconds) = parse_elapsed_edit_time(text) {
-                *value = format_elapsed_edit_time(seconds);
-                *group = 3;
+                // A pasted timestamp may explicitly include fractional precision.
+                let subseconds = value.contains('.') || seconds.fract() != 0.0;
+                *value = format_transport_time(seconds, duration, subseconds);
+                *group = timecode_groups(value).len().saturating_sub(1);
                 *digits = 0;
             }
         }
@@ -651,7 +669,7 @@ pub fn draw_elapsed_editor(
     enabled: bool,
 ) -> egui::Response {
     let elapsed = resolve_display_time(app.seek_pos, app.playback_time);
-    let rendered = format_elapsed_display_time(elapsed, app.duration, app.show_subseconds);
+    let rendered = format_transport_time(elapsed, app.duration, app.show_subseconds);
     let size = elapsed_editor_size(ui);
     let desired_width = size.x;
     let edit_id = ui.make_persistent_id(id_source);
@@ -708,6 +726,7 @@ pub fn draw_elapsed_editor(
                 &mut app.elapsed_time_input,
                 &mut app.elapsed_time_group,
                 &mut app.elapsed_time_group_digits,
+                app.duration,
                 event,
             ),
         }
@@ -768,11 +787,7 @@ pub fn draw_elapsed_editor(
         // not galley_pos itself. Use that same origin for glyph hit testing.
         let cursor = output.galley.cursor_from_pos(position - output.galley_pos
             + egui::vec2(output.galley.rect.left(), 0.0));
-        let prefix = if editing { 0 } else {
-            usize::from(app.duration < 3600.0 && elapsed < 3600.0)
-                + usize::from(app.duration < 60.0 && elapsed < 60.0)
-        };
-        timecode_group_at_cursor(output.galley.text(), cursor.index.0) + prefix
+        timecode_group_at_cursor(output.galley.text(), cursor.index.0)
     });
     let mut response = output.response.response;
 
@@ -789,8 +804,7 @@ pub fn draw_elapsed_editor(
                 let pointer_pressed = response.contains_pointer()
                     && ui.input(|input| input.pointer.primary_pressed());
                 // Only a new press may retarget an existing editor. The click
-                // that activates display mode may be replayed in a layout
-                // pass after its shorter galley becomes the full edit mask.
+                // that activates display mode already selected its group.
                 if pointer_pressed && let Some(selected) = pointer_group {
                     app.elapsed_time_group = selected;
                     app.elapsed_time_group_digits = 0;
@@ -839,8 +853,7 @@ pub fn draw_elapsed_editor(
         response = response.on_hover_text(app.tr("Click to enter an exact playback time."));
         if response.clicked() {
             begin_elapsed_edit(app);
-            // The display text may omit milliseconds, so hit-test the galley
-            // that was actually clicked, before switching to the full mask.
+            // The display and edit fields share the same visible groups.
             app.elapsed_time_group = pointer_group.unwrap_or(0);
             ui.data_mut(|data| data.insert_temp(owner_key, edit_id));
             ui.ctx().request_repaint();
@@ -848,14 +861,10 @@ pub fn draw_elapsed_editor(
     }
 
     response.context_menu(|ui| {
-        let copied_time = if app.editing_elapsed_time {
+        let copied_time = if editing && app.editing_elapsed_time {
             app.elapsed_time_input.clone()
         } else {
-            format_player_time(
-                resolve_display_time(app.seek_pos, app.playback_time),
-                true,
-                app.show_subseconds,
-            )
+            display_buffer.clone()
         };
         copy_time_menu_item(ui, &app.tr("Copy"), &copied_time);
         if ui
@@ -1127,7 +1136,6 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     }
                 );
                 let elapsed_time = resolve_display_time(app.seek_pos, app.playback_time);
-                let is_long_video = app.duration >= 3600.0;
                 let show_subseconds = app.show_subseconds;
                 let display_total = if app.show_remaining_time {
                     -(app.duration - elapsed_time)
@@ -1155,7 +1163,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         false,
                     ),
                     crate::media::MediaTimelineState::Finite { .. } => (
-                        format_player_time(display_total, is_long_video, show_subseconds),
+                        format_transport_time(display_total, app.duration, show_subseconds),
                         if app.show_remaining_time {
                             app.tr("Showing time remaining. Click to show total duration.")
                         } else {
@@ -1350,12 +1358,14 @@ pub(super) fn elapsed_editor_size(ui: &egui::Ui) -> egui::Vec2 {
         (height + 6.0).max(super::control_density::height(ui)))
 }
 
-fn format_elapsed_display_time(seconds: f64, duration: f64, subseconds: bool) -> String {
-    let hours = seconds.abs() >= 3600.0 || duration >= 3600.0;
-    let text = format_player_time(seconds, hours, subseconds);
-    if !hours && seconds.abs() < 60.0 && duration < 60.0 {
-        text.strip_prefix("00:").unwrap_or(&text).to_owned()
-    } else { text }
+pub(super) fn format_transport_time(seconds: f64, duration: f64, subseconds: bool) -> String {
+    let span_ms = (seconds.abs().max(duration) * 1000.0).round();
+    let mut text = format_player_time(seconds, span_ms >= 3_600_000.0, subseconds);
+    if span_ms < 60_000.0 {
+        let start = usize::from(seconds < 0.0);
+        text.drain(start..start + 3);
+    }
+    text
 }
 
 pub fn format_player_time(time: f64, include_hours: bool, show_subseconds: bool) -> String {
@@ -1468,16 +1478,16 @@ mod tests {
     fn duration_context_menu_copies_visible_time_without_seeking_or_toggling() {
         let _guard = crate::app::tests::lock_app_tests();
         let mut app = PealayerApp::default();
-        app.playback_time = 83.125;
-        app.duration = 3723.5;
+        app.playback_time = 3.125;
+        app.duration = 40.5;
         for width in [320.0, 768.0, 1440.0] {
             for remaining in [false, true] {
                 for subseconds in [false, true] {
                     app.show_remaining_time = remaining;
                     app.show_subseconds = subseconds;
-                    let text = format_player_time(
+                    let text = format_transport_time(
                         if remaining { -(app.duration - app.playback_time) } else { app.duration },
-                        true, subseconds,
+                        app.duration, subseconds,
                     );
                     let ctx = egui::Context::default();
                     ctx.all_styles_mut(|style| style.animation_time = 0.0);
@@ -1513,7 +1523,7 @@ mod tests {
                     assert!(output.platform_output.commands.iter().any(|command|
                         matches!(command, egui::OutputCommand::CopyText(value) if value == &text)
                     ), "clipboard must match the displayed timecode: {text}");
-                    assert_eq!(app.playback_time, 83.125);
+                    assert_eq!(app.playback_time, 3.125);
                     assert!(app.seek_pos.is_none());
                     assert_eq!(app.show_remaining_time, remaining);
                 }
@@ -1692,14 +1702,14 @@ mod tests {
         let mut value = "01:02:03.004".to_string();
         let mut group = 1;
         let mut digits = 0;
-        edit_timecode_segment(&mut value, &mut group, &mut digits, &egui::Event::Text("45".into()));
+        edit_timecode_segment(&mut value, &mut group, &mut digits, 4000.0, &egui::Event::Text("45".into()));
         assert_eq!(value, "01:45:03.004");
         assert_eq!(group, 2);
-        edit_timecode_segment(&mut value, &mut group, &mut digits, &egui::Event::Text("x".into()));
+        edit_timecode_segment(&mut value, &mut group, &mut digits, 4000.0, &egui::Event::Text("x".into()));
         assert_eq!(value, "01:45:03.004");
-        edit_timecode_segment(&mut value, &mut group, &mut digits, &egui::Event::Text("7".into()));
+        edit_timecode_segment(&mut value, &mut group, &mut digits, 4000.0, &egui::Event::Text("7".into()));
         assert_eq!(value, "01:45:07.004");
-        edit_timecode_segment(&mut value, &mut group, &mut digits, &egui::Event::Paste("00:01:20.250".into()));
+        edit_timecode_segment(&mut value, &mut group, &mut digits, 4000.0, &egui::Event::Paste("00:01:20.250".into()));
         assert_eq!(value, "00:01:20.250");
         assert_eq!(timecode_groups(&value), vec![0..2, 3..5, 6..8, 9..12]);
     }
@@ -1714,13 +1724,17 @@ mod tests {
     }
 
     #[test]
-    fn elapsed_display_omits_only_unneeded_leading_groups() {
-        assert_eq!(format_elapsed_display_time(3.125,40.0,true),"03.125");
-        assert_eq!(format_elapsed_display_time(3.0,40.0,false),"03");
-        assert_eq!(format_elapsed_display_time(3.0,120.0,false),"00:03");
-        assert_eq!(format_elapsed_display_time(63.0,120.0,false),"01:03");
-        assert_eq!(format_elapsed_display_time(3.0,4000.0,false),"00:00:03");
-        assert_eq!(format_elapsed_edit_time(3.125),"00:00:03.125","edit mask remains complete");
+    fn transport_time_uses_the_media_span_and_preserves_remaining_sign() {
+        assert_eq!(format_transport_time(3.125, 40.0, true), "03.125");
+        assert_eq!(format_transport_time(3.0, 40.0, false), "03");
+        assert_eq!(format_transport_time(3.0, 120.0, false), "00:03");
+        assert_eq!(format_transport_time(63.0, 120.0, false), "01:03");
+        assert_eq!(format_transport_time(3.0, 4000.0, false), "00:00:03");
+        assert_eq!(format_transport_time(40.0, 40.0, true), "40.000");
+        assert_eq!(format_transport_time(-3.125, 40.0, true), "-03.125");
+        assert_eq!(format_transport_time(-3.125, 120.0, true), "-00:03.125");
+        assert_eq!(format_transport_time(59.9996, 59.9996, true), "01:00.000");
+        assert_eq!(format_transport_time(3599.9996, 3599.9996, true), "01:00:00.000");
     }
 
     #[test]
@@ -1814,8 +1828,9 @@ mod tests {
         }
         for scale in [1.0, 1.5, 2.0] {
             for subseconds in [false, true] {
-                for (playback,duration,prefix) in [(3723.456,4000.0,0),(63.456,120.0,1),(3.456,40.0,2)] {
-                for initial_group in 0..(if subseconds { 4 } else { 3 })-prefix {
+                for (playback,duration,whole_groups) in [(3723.456,4000.0,3),(63.456,120.0,2),(3.456,40.0,1)] {
+                let groups = whole_groups + usize::from(subseconds);
+                for initial_group in 0..groups {
                     let ctx = egui::Context::default();
                     ctx.set_pixels_per_point(scale);
                     let mut app = PealayerApp::default();
@@ -1823,11 +1838,12 @@ mod tests {
                     app.show_subseconds = subseconds;
                     frame(&ctx, &mut app, vec![]);
                     let output = frame(&ctx, &mut app, vec![]);
-                    let shown = format_elapsed_display_time(app.playback_time,app.duration,subseconds);
+                    let shown = format_transport_time(app.playback_time,app.duration,subseconds);
                     click(&ctx, &mut app, point(&output, &shown, initial_group));
                     assert!(app.editing_elapsed_time);
-                    assert_eq!(app.elapsed_time_group, initial_group+prefix, "display click at scale {scale}");
-                    for group in [3, 1, 2, 0] {
+                    assert_eq!(app.elapsed_time_input, shown, "edit must start with the displayed timestamp");
+                    assert_eq!(app.elapsed_time_group, initial_group, "display click at scale {scale}");
+                    for group in (0..groups).rev() {
                         let output = frame(&ctx, &mut app, vec![]);
                         let value = app.elapsed_time_input.clone();
                         click(&ctx, &mut app, point(&output, &value, group));
@@ -1843,7 +1859,6 @@ mod tests {
 
     #[test]
     fn elapsed_mask_accepts_local_digits_and_rejects_invalid_paste() {
-        assert_eq!(format_elapsed_edit_time(3.125), "00:00:03.125");
         assert_eq!(parse_elapsed_edit_time("۰۰:۰۱:۰۲.۰۰۳"), Some(62.003));
         for value in ["00:-1", "1e2", "NaN", "1.", ".5", "00:60:00", "100:00:00"] {
             assert_eq!(parse_elapsed_edit_time(value), None, "{value}");
@@ -1854,13 +1869,26 @@ mod tests {
     fn elapsed_typed_separators_do_not_double_advance_and_backspace_preserves_mask() {
         let mut value = "00:00:00.000".to_owned();
         let (mut group, mut digits) = (0, 0);
-        edit_timecode_segment(&mut value, &mut group, &mut digits, &egui::Event::Text("01:23:45.678".into()));
+        edit_timecode_segment(&mut value, &mut group, &mut digits, 4000.0, &egui::Event::Text("01:23:45.678".into()));
         assert_eq!(value, "01:23:45.678");
-        edit_timecode_segment(&mut value, &mut group, &mut digits, &egui::Event::Key {
+        edit_timecode_segment(&mut value, &mut group, &mut digits, 4000.0, &egui::Event::Key {
             key: egui::Key::Backspace, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE,
         });
         assert_eq!(value, "01:23:45.067");
         assert_eq!(timecode_groups(&value), vec![0..2, 3..5, 6..8, 9..12]);
+    }
+
+    #[test]
+    fn compact_elapsed_segments_keep_their_numeric_limits_and_paste_precision() {
+        let mut value = "03".to_owned();
+        let (mut group, mut digits) = (0, 0);
+        edit_timecode_segment(&mut value, &mut group, &mut digits, 40.0, &egui::Event::Text("99".into()));
+        assert_eq!(value, "59");
+        edit_timecode_segment(&mut value, &mut group, &mut digits, 40.0, &egui::Event::Paste("00:00:12.345".into()));
+        assert_eq!((value.as_str(), group), ("12.345", 1));
+        assert_eq!(parse_elapsed_edit_time(&value), Some(12.345));
+        edit_timecode_segment(&mut value, &mut group, &mut digits, 40.0, &egui::Event::Text("678".into()));
+        assert_eq!(value, "12.678");
     }
 
     #[test]
