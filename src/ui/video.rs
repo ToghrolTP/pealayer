@@ -407,9 +407,6 @@ fn draw_composition(app: &PealayerApp, ui: &mut egui::Ui, dest: egui::Rect, ppi:
         || (app.is_scrubbing || app.pending_scrub_commit.is_some()) && app.active_pseudo_frame.is_some();
     let visible = composition::update(&app.mpv_client, dest, ppi, &media, !covered);
 
-    if app.windows_video_taskbar_thumbnail && !media.is_empty() {
-        composition::capture_taskbar();
-    }
     let cache_id = ui.id().with("directcomposition-fallback");
     if !visible && !media.is_empty() {
         sync_native_osd(app, ui.ctx(), None, dest.size());
@@ -438,7 +435,7 @@ fn draw_composition(app: &PealayerApp, ui: &mut egui::Ui, dest: egui::Rect, ppi:
             super::simple_controls::publish_video(ui.ctx(), Some((texture.id(), dest)));
         }
         let retry = if app.is_paused { 200 } else { 33 };
-        if !app.is_paused || !composition::has_swapchain() {
+        if !app.is_paused || !composition::has_swapchain() && !app.video_tracks.is_empty() {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(retry));
         }
     } else {
@@ -1090,8 +1087,16 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     }
 
     #[cfg(windows)]
-    if native_osd {
-        sync_native_osd(app, ui.ctx(), native_card, dest_rect.size());
+    if using_composition {
+        let has_native_osd = native_osd && native_card.is_some();
+        if native_osd {
+            sync_native_osd(app, ui.ctx(), native_card, dest_rect.size());
+        }
+        if app.windows_video_taskbar_thumbnail
+            && crate::platform::d3d11_composition::capture_taskbar(has_native_osd)
+        {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
+        }
     }
 
     // 3. Schedule PaintCallback to render current frame at exact physical pixel size

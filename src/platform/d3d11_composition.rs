@@ -61,6 +61,8 @@ struct CompositionState {
     flip_chain_advanced: bool,
     media: String,
     last_present_count: Option<u32>,
+    app_osd_visible: bool,
+    await_clean_present: Option<(u32, Instant)>,
     overlay_present_count: Option<u32>,
     overlay_revision: u64,
     last_swapchain_query: Option<Instant>,
@@ -100,6 +102,8 @@ fn create_state(hwnd: isize) -> windows::core::Result<CompositionState> {
         flip_chain_advanced: false,
         media: String::new(),
         last_present_count: None,
+        app_osd_visible: false,
+        await_clean_present: None,
         overlay_present_count: None,
         overlay_revision: 0,
         last_swapchain_query: None,
@@ -243,9 +247,12 @@ fn capture_composition_frame(
         log::debug!("D3D11 taskbar capture skipped a multisampled swapchain");
         return Ok(());
     }
+    let device: ID3D11Device = unsafe { swapchain.GetDevice()? };
+    if unsafe { device.GetCreationFlags() } & D3D11_CREATE_DEVICE_SINGLETHREADED.0 != 0 {
+        return Ok(());
+    }
     let signature = (desc.Width, desc.Height, desc.Format);
     if state.thumbnail_staging_desc != Some(signature) {
-        let device: ID3D11Device = unsafe { swapchain.GetDevice()? };
         let staging_desc = D3D11_TEXTURE2D_DESC {
             MipLevels: 1,
             ArraySize: 1,
@@ -267,17 +274,13 @@ fn capture_composition_frame(
     let Some(staging) = state.thumbnail_staging.as_ref() else {
         return Ok(());
     };
-    let device: ID3D11Device = unsafe { swapchain.GetDevice()? };
-    if unsafe { device.GetCreationFlags() } & D3D11_CREATE_DEVICE_SINGLETHREADED.0 != 0 {
-        return Ok(());
-    }
     let context = unsafe { device.GetImmediateContext()? };
     let lock = context.cast::<ID3D11Multithread>()?;
     // mpv presents on its own thread. Serialize these immediate-context
     // operations with its draws. The explicit lock is released before resize.
     unsafe {
         if !lock.GetMultithreadProtected().as_bool() {
-            lock.SetMultithreadProtected(true);
+            let _ = lock.SetMultithreadProtected(true);
         }
         lock.Enter();
     }
@@ -423,17 +426,37 @@ pub fn fallback_image(
     })
 }
 
-pub fn capture_taskbar() {
+/// Returns true while a just-cleared native OSD waits for a clean present.
+pub fn capture_taskbar(has_app_osd: bool) -> bool {
     STATE.with(|slot| {
         let mut slot = slot.borrow_mut();
-        let Some(state) = slot.as_mut() else { return; };
-        if state.media.is_empty() { return; }
+        let Some(state) = slot.as_mut() else { return false; };
+        if state.media.is_empty() { return false; }
+        if has_app_osd {
+            state.app_osd_visible = true;
+            return false;
+        }
+        let present = state.swapchain.as_ref()
+            .and_then(|swapchain| unsafe { swapchain.GetLastPresentCount().ok() });
+        if state.app_osd_visible {
+            state.app_osd_visible = false;
+            state.await_clean_present = present.map(|count| (count, Instant::now()));
+        }
+        if let Some((count, cleared_at)) = state.await_clean_present {
+            if present == Some(count) {
+                // Leave the last clean thumbnail intact. If the driver hasn't
+                // presented again within this budget, wait for a real frame.
+                return cleared_at.elapsed() < Duration::from_millis(500);
+            }
+            state.await_clean_present = None;
+        }
         let media = state.media.clone();
         let hwnd = state.hwnd;
         if let Err(error) = capture_composition_frame(state, hwnd, &media, CapturePurpose::Taskbar) {
             log::debug!("D3D11 taskbar capture failed: {error}");
         }
-    });
+        false
+    })
 }
 
 /// Synchronize mpv's composition swapchain with the physical egui video rect.
@@ -460,6 +483,7 @@ pub fn update(
             state.overlay_present_count = None;
             state.last_overlay_capture = None;
             state.last_present_count = None;
+            state.await_clean_present = None;
             state.last_swapchain_query = None;
         }
 
