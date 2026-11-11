@@ -334,7 +334,7 @@ pub fn run() -> eframe::Result {
             #[cfg(windows)]
             let use_composition = loaded_config.windows_video_renderer.uses_composition()
                 && !cli_options.web_only
-                && crate::platform::d3d11_composition::initialize(cc.winit_window());
+                && crate::platform::d3d11_composition::initialize(cc.winit_window().map(Arc::as_ref));
             #[cfg(not(windows))]
             let use_composition = false;
 

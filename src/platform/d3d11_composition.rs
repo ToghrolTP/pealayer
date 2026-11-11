@@ -346,7 +346,7 @@ pub fn initialize(window: Option<&winit::window::Window>) -> bool {
     let RawWindowHandle::Win32(handle) = handle.as_raw() else { return false; };
     match create_state(handle.hwnd.get()) {
         Ok(mut state) => {
-            let font = egui_phosphor::regular::FONT;
+            let font = egui_phosphor::Variant::Regular.font_bytes();
             let mut font_count = 0;
             state.icon_font = unsafe {
                 windows::Win32::Graphics::Gdi::AddFontMemResourceEx(
@@ -586,4 +586,49 @@ pub fn diagnostics() -> serde_json::Value {
         "swap_effect": SWAP_EFFECT.lock().ok().and_then(|effect| *effect),
         "zero_copy_presentation": active(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn staging_capture_preserves_color_and_ignores_row_padding() {
+        let mut data = [3u8, 2, 1, 0, 99, 99, 99, 99, 6, 5, 4, 0, 98, 98, 98, 98];
+        let mapped = D3D11_MAPPED_SUBRESOURCE {
+            pData: data.as_mut_ptr().cast(),
+            RowPitch: 8,
+            DepthPitch: 16,
+        };
+        let mut description = D3D11_TEXTURE2D_DESC {
+            Width: 1,
+            Height: 2,
+            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            ..Default::default()
+        };
+        let bgra = unpack_swapchain_frame(mapped, description).unwrap();
+        assert_eq!(bgra.as_raw(), &[1, 2, 3, 255, 4, 5, 6, 255]);
+        description.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        let rgba = unpack_swapchain_frame(mapped, description).unwrap();
+        assert_eq!(rgba.as_raw(), &[3, 2, 1, 255, 6, 5, 4, 255]);
+    }
+
+    #[test]
+    fn staging_capture_expands_ten_bit_channels_and_rejects_bad_stride() {
+        let mut data = (1023u32 | (512 << 10)).to_le_bytes();
+        let mut mapped = D3D11_MAPPED_SUBRESOURCE {
+            pData: data.as_mut_ptr().cast(),
+            RowPitch: 4,
+            DepthPitch: 4,
+        };
+        let description = D3D11_TEXTURE2D_DESC {
+            Width: 1,
+            Height: 1,
+            Format: DXGI_FORMAT_R10G10B10A2_UNORM,
+            ..Default::default()
+        };
+        assert_eq!(unpack_swapchain_frame(mapped, description).unwrap().as_raw(), &[255, 128, 0, 255]);
+        mapped.RowPitch = 3;
+        assert!(unpack_swapchain_frame(mapped, description).is_none());
+    }
 }
