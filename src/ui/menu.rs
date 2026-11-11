@@ -245,9 +245,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         let _ = crate::remote_location::request("", None, false, ui.ctx());
                         ui.close();
                     }
-                    if ui.button(format!("{} Start Virtual Board Demo", crate::ui::icons::LIGHTNING)).clicked() {
-                        ui.close();
-                        app.start_virtual_board_demo();
+                    for (label, showcase) in [("Start Virtual Board", false), ("Open Virtual Board demo", true)] {
+                        if ui.button(format!("{} {}", crate::ui::icons::LIGHTNING, app.tr(label))).clicked() {
+                            ui.close();
+                            app.start_virtual_board(showcase);
+                        }
                     }
 
                     crate::ui::icons::submenu(ui, app.tr("Open Recent"), |ui| {

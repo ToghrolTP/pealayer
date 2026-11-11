@@ -299,6 +299,7 @@ jobs:
           if [[ "$RUNNER_OS" == Windows ]]; then downloader="target/x86_64-pc-windows-gnu/release/pealayer-downloader.exe"; fi
           cp "$downloader" "$output/"
           cp assets/fonts/Vazirmatn-Regular.ttf "$output/assets/fonts/"
+          cp test-data/jellyfish.mp4 "$output/assets/"
           cp -r web_ui/dist "$output/web_ui/"
           if [[ "$RUNNER_OS" == Windows ]]; then cp "${MPV_DLL_PATH//\\//}" "$output/"; fi
           if [[ "$RUNNER_OS" == macOS ]]; then

@@ -1264,6 +1264,8 @@ pub struct AppConfig {
     pub right_hold_action: PlayerDragAction,
     pub fullscreen_video_background: VideoBackground,
     pub motion_control_mode: MotionControlMode,
+    pub virtual_seat_travel_ms: u32,
+    pub virtual_buzzer_audio: bool,
     pub compact_hardware_controls: bool,
     pub compact_timeline_tracks: bool,
     /// Keep cue labels inside their clip bounds and elide long text. Disable
@@ -1489,6 +1491,8 @@ impl Default for AppConfig {
             right_hold_action: PlayerDragAction::Seek,
             fullscreen_video_background: VideoBackground::Black,
             motion_control_mode: MotionControlMode::Hold,
+            virtual_seat_travel_ms: 3_000,
+            virtual_buzzer_audio: true,
             compact_hardware_controls: false,
             compact_timeline_tracks: true,
             timeline_hide_cue_text_overflow: true,
@@ -2198,6 +2202,9 @@ impl AppConfig {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        if !(100..=60_000).contains(&self.virtual_seat_travel_ms) {
+            return Err("Virtual seat travel must be between 100 and 60000 ms".into());
+        }
         if self.project_discovery.folders.len()>32768 || self.project_discovery.associations.len()>1000 {
             return Err("Project discovery exceeds folder or remembered association limits".into());
         }

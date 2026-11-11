@@ -5,7 +5,8 @@ param(
     [switch]$Run,
     [string]$Branding,
     [string]$LibmpvDirectory,
-    [string]$OutputDirectory
+    [string]$OutputDirectory,
+    [string]$VirtualBoardBundleDirectory
 )
 
 $ErrorActionPreference = 'Stop'
@@ -58,6 +59,16 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
 }
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
+$virtualBoardFiles = @()
+if ($VirtualBoardBundleDirectory) {
+    $virtualBoardFiles = @('controller.exe', 'virtual_board.exe')
+    foreach ($name in $virtualBoardFiles) {
+        $candidate = Join-Path $VirtualBoardBundleDirectory $name
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+            throw "A Virtual Board bundle requires both verified companion executables. Missing $name."
+        }
+    }
+}
 . (Join-Path $PSScriptRoot 'libmpv-windows.ps1')
 . (Join-Path $PSScriptRoot 'package-probe-windows.ps1')
 $packageCommit = (& git -C $repositoryRoot rev-parse HEAD).Trim()
@@ -227,6 +238,10 @@ New-Item -ItemType Directory -Force -Path $fontDirectory | Out-Null
 $packagedFont = Join-Path $fontDirectory 'Vazirmatn-Regular.ttf'
 [void](Copy-PealayerFileLowWrite -Source $fontSource -Destination $packagedFont)
 [void](Copy-PealayerFileLowWrite -Source (Join-Path $repositoryRoot 'assets\fonts\Inter-LICENSE.txt') -Destination (Join-Path $fontDirectory 'Inter-LICENSE.txt'))
+[void](Copy-PealayerFileLowWrite -Source (Join-Path $repositoryRoot 'test-data\jellyfish.mp4') -Destination (Join-Path $outputDirectory 'assets\jellyfish.mp4'))
+foreach ($name in $virtualBoardFiles) {
+    [void](Copy-PealayerFileLowWrite -Source (Join-Path $VirtualBoardBundleDirectory $name) -Destination (Join-Path $outputDirectory $name))
+}
 $webDistribution = Join-Path $repositoryRoot 'web_ui\dist'
 $webUiPackaged = $false
 if (Test-Path -LiteralPath (Join-Path $webDistribution 'index.html')) {
@@ -248,7 +263,7 @@ if (Test-Path -LiteralPath (Join-Path $webDistribution 'index.html')) {
 }
 Restore-PackageWebDistribution -RepositoryRoot $repositoryRoot
 
-$artifacts = @($effectiveExecutableFile,'pealayer-downloader.exe','libmpv-2.dll','mpv-2.dll','assets/fonts/Vazirmatn-Regular.ttf','assets/fonts/Inter-LICENSE.txt') | ForEach-Object {
+$artifacts = (@($effectiveExecutableFile,'pealayer-downloader.exe','libmpv-2.dll','mpv-2.dll','assets/fonts/Vazirmatn-Regular.ttf','assets/fonts/Inter-LICENSE.txt','assets/jellyfish.mp4') + $virtualBoardFiles) | ForEach-Object {
     $path = Join-Path $outputDirectory $_
     [ordered]@{
         path = $_

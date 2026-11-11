@@ -152,6 +152,23 @@ pub struct HardwareMotionState {
     pub right: HardwareMotionSide,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct VirtualSeatSample {
+    position_basis_points: [u16; 2],
+    pub full_travel_ms: u32,
+    sampled_at: String,
+}
+
+impl VirtualSeatSample {
+    pub fn positions(&self) -> [f32; 2] {
+        self.position_basis_points.map(|position| f32::from(position) / 10_000.0)
+    }
+
+    fn time(&self) -> Option<jiff::Timestamp> {
+        self.sampled_at.parse().ok()
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HardwareMelodyNote {
     pub frequency_hz: u16,
@@ -205,6 +222,8 @@ pub struct HardwareCapabilities {
     #[serde(default)]
     pub relays_sampled: bool,
     pub motion: Option<HardwareMotionState>,
+    #[serde(default)]
+    pub virtual_seats: Option<VirtualSeatSample>,
     pub board_profile: Option<HardwareBoardProfile>,
     pub controls: Vec<HardwareControl>,
     pub channel_folders: Vec<HardwareChannelFolder>,
@@ -216,6 +235,8 @@ pub struct HardwareCapabilities {
     pub supports_rf_transmit: bool,
     pub supports_segment_display: bool,
     pub supports_lcd_display: bool,
+    #[serde(default)]
+    pub supports_virtual_panel_keys: bool,
     pub supports_addressable_led: bool,
     pub supports_persistent_settings: bool,
     pub supports_measurements: bool,
@@ -373,11 +394,24 @@ impl HardwareCapabilities {
         if snapshot["motion"].is_object() && parsed.motion.is_some() && self.motion != parsed.motion {
             self.motion = parsed.motion; changed = true;
         }
+        changed |= self.apply_virtual_seat_sample(parsed.virtual_seats);
         if snapshot["outputs"].is_object() {
             changed |= self.buzzer != parsed.buzzer || self.status_led_override != parsed.status_led_override || self.macro_running != parsed.macro_running;
             self.buzzer = parsed.buzzer; self.status_led_override = parsed.status_led_override; self.macro_running = parsed.macro_running;
         }
         changed |= self.apply_pwm_push(&snapshot["pwm_values"]);
+        changed
+    }
+
+    fn apply_virtual_seat_sample(&mut self, sample: Option<VirtualSeatSample>) -> bool {
+        let Some(sample) = sample.filter(|sample| {
+            self.virtual_seats.as_ref().is_none_or(|current| sample.time() > current.time())
+        }) else { return false; };
+        let changed = self.virtual_seats.as_ref().is_none_or(|current| {
+            current.position_basis_points != sample.position_basis_points
+                || current.full_travel_ms != sample.full_travel_ms
+        });
+        self.virtual_seats = Some(sample);
         changed
     }
 
@@ -976,6 +1010,21 @@ impl HardwareCapabilities {
                 if self.telemetry.hot == Some(active) { false }
                 else { self.telemetry.hot = Some(active); true }
             }
+            Some("key") if self.supports_virtual_panel_keys && self.port.product == "PCController Virtual Board"
+                && event["source"] == "physical" => {
+                let Some(key) = event["key"].as_u64().filter(|key| (1..=4).contains(key)) else {
+                    return false;
+                };
+                let Some(panel) = self.front_panel.as_mut() else { return false; };
+                let mask = 1 << (key - 1);
+                let previous = panel.pressed_keys;
+                match event["gesture"].as_str() {
+                    Some("down") => panel.pressed_keys |= mask,
+                    Some("up") => panel.pressed_keys &= !mask,
+                    _ => return false,
+                }
+                panel.pressed_keys != previous
+            }
             Some("front_panel.segment") => {
                 let Some(metadata) = event.get("metadata").filter(|value| value.is_object()) else {
                     return false;
@@ -1176,6 +1225,12 @@ impl HardwareCapabilities {
             self.status_led_revision = current.status_led_revision;
         }
         if self.board_connected && same_host {
+            if self.connection_generation == current.connection_generation
+                && current.virtual_seats.as_ref().is_some_and(|sample|
+                    self.virtual_seats.as_ref().is_none_or(|new| sample.time() >= new.time()))
+            {
+                self.virtual_seats.clone_from(&current.virtual_seats);
+            }
             match (&mut self.motion, &current.motion) {
                 (Some(refreshed), Some(live)) => {
                     if live.left.revision > 0 && live.left.revision >= refreshed.left.revision {
@@ -1237,6 +1292,7 @@ impl HardwareCapabilities {
             || self.relays_sampled
             || !self.active_relays.is_empty()
             || self.motion.is_some()
+            || self.virtual_seats.is_some()
             || self.status_led.is_some()
             || self.front_panel.is_some()
             || self.telemetry != HardwareTelemetry::default();
@@ -1245,6 +1301,7 @@ impl HardwareCapabilities {
         self.active_relays.clear();
         self.relays_sampled = false;
         self.motion = None;
+        self.virtual_seats = None;
         self.status_led = None;
         self.front_panel = None;
         self.telemetry = HardwareTelemetry::default();
@@ -1286,6 +1343,44 @@ fn hardware_motion_state(snapshot: &Value) -> Option<HardwareMotionState> {
         left: hardware_motion_side(motion.get("left")?)?,
         right: hardware_motion_side(motion.get("right")?)?,
     })
+}
+
+fn parse_virtual_seat_sample(value: &Value) -> Option<VirtualSeatSample> {
+    let position = |key| {
+        let position = value.get(key)?.as_f64()?;
+        (0.0..=1.0).contains(&position).then(|| (position * 10_000.0).round() as u16)
+    };
+    let full_travel_ms = value.get("full_travel_ms")?.as_u64()?;
+    if !(100..=60_000).contains(&full_travel_ms) {
+        return None;
+    }
+    let sampled_at = value.get("sampled_at")?.as_str()?;
+    sampled_at.parse::<jiff::Timestamp>().ok()?;
+    Some(VirtualSeatSample {
+        position_basis_points: [position("left_position")?, position("right_position")?],
+        full_travel_ms: full_travel_ms as u32,
+        sampled_at: sampled_at.to_owned(),
+    })
+}
+
+#[cfg(test)]
+#[test]
+fn virtual_seat_samples_reject_reordered_and_out_of_range_data() {
+    let snapshot = |sampled_at, left| serde_json::json!({
+        "connected":true, "motion":{"simulation":{
+            "left_position":left, "right_position":0.27, "full_travel_ms":3000,
+            "sampled_at":sampled_at
+        }}
+    });
+    let mut caps = HardwareCapabilities::default();
+    assert!(caps.apply_snapshot_values(&snapshot("2026-11-11T00:00:02Z", 0.61)));
+    assert!(!caps.apply_snapshot_values(&snapshot("2026-11-11T00:00:01Z", 0.42)));
+    assert!(!caps.apply_snapshot_values(&snapshot("2026-11-11T00:00:03Z", 1.01)));
+    let sample = caps.virtual_seats.as_ref().unwrap();
+    assert_eq!(sample.positions(), [0.61, 0.27]);
+    assert_eq!(sample.full_travel_ms, 3000);
+    caps.mark_board_disconnected();
+    assert!(caps.virtual_seats.is_none());
 }
 
 fn parse_raw_segments(value: Option<&Value>) -> Option<Vec<u8>> {
@@ -3184,6 +3279,9 @@ fn parse_hardware_capabilities_with_front_panel(
         active_relays,
         relays_sampled: board_connected && snapshot.pointer("/status/active_relays").and_then(Value::as_u64).is_some(),
         motion,
+        virtual_seats: board_connected
+            .then(|| snapshot.pointer("/motion/simulation").and_then(parse_virtual_seat_sample))
+            .flatten(),
         board_profile,
         controls,
         // The transport boundary validates this required catalog before
@@ -3197,6 +3295,13 @@ fn parse_hardware_capabilities_with_front_panel(
         supports_rf_transmit: board_connected && capability_bits & CAPABILITY_RF != 0,
         supports_segment_display: board_connected && capability_bits & CAPABILITY_SEGMENTS != 0,
         supports_lcd_display: board_connected && capability_bits & CAPABILITY_LCD != 0,
+        supports_virtual_panel_keys: board_connected && snapshot.pointer("/hello/build_features")
+            .and_then(value_as_u64)
+            .is_some_and(|features| {
+                // NativeHAL and VirtualKeyHold, as advertised by the HELLO profile.
+                const NATIVE_VIRTUAL_KEYS: u64 = (1 << 7) | (1 << 0);
+                features & NATIVE_VIRTUAL_KEYS == NATIVE_VIRTUAL_KEYS
+            }),
         supports_addressable_led: board_connected
             && capability_bits & CAPABILITY_ADDRESSABLE_LED != 0,
         supports_persistent_settings: board_connected

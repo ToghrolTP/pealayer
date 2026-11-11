@@ -382,6 +382,7 @@ pub enum InteropCommand {
     },
     RefreshHardwareCatalog,
     SetHardwareConnection { connected: bool },
+    SetVirtualSeatTravel { full_travel_ms: u32 },
     HardwareAuthority {
         operation: String,
         #[serde(default)]
@@ -671,6 +672,9 @@ impl InteropCommand {
             }
             Self::SetHardwarePwmPolicy { channel, .. } if *channel >= 16 => {
                 Err("PWM policy channel must be from 0 to 15".to_string())
+            }
+            Self::SetVirtualSeatTravel { full_travel_ms } if !(100..=60_000).contains(full_travel_ms) => {
+                Err("Virtual seat travel must be between 100 and 60000 ms".into())
             }
             Self::PlayHardwareMelody { name, repeats }
                 if name.trim().is_empty() || name.len() > 64 || *repeats > 20 =>
@@ -993,6 +997,12 @@ pub fn command_catalog() -> Value {
     catalog["branding"]["clear"] = serde_json::json!("pealayer.branding.clear");
     catalog["commands"].as_array_mut().unwrap().push(serde_json::json!("clear_branding"));
     catalog["commands"].as_array_mut().unwrap().push(serde_json::json!("open_download_center"));
+    catalog["commands"].as_array_mut().unwrap().push(serde_json::json!("set_virtual_seat_travel"));
+    catalog["virtual_seat_travel"] = serde_json::json!({
+        "method":"pealayer.hardware.virtual_seat_travel.set", "command":"set_virtual_seat_travel",
+        "scope":"local Virtual Board", "range_ms":[100,60000],
+        "feedback":"hardware_details.virtual_seats.full_travel_ms"
+    });
     catalog["updates"] = serde_json::json!({"http":"/api/update/", "methods":crate::update::rpc::METHODS,
         "scope":"local process, never implicitly relayed to authority", "chunk_bytes":crate::update::rpc::CHUNK_BYTES,
         "encoding":"base64", "completion":"exact artifact and health acknowledgement, not transfer acceptance"});
@@ -2392,6 +2402,11 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         "pealayer.hardware.connection" => Some(InteropCommand::SetHardwareConnection {
             connected: request.params.get("connected").and_then(Value::as_bool).ok_or("Hardware connection requires connected: true or false")?,
         }),
+        "pealayer.hardware.virtual_seat_travel.set" => Some(InteropCommand::SetVirtualSeatTravel {
+            full_travel_ms: request.params["full_travel_ms"].as_u64()
+                .and_then(|value| u32::try_from(value).ok())
+                .ok_or("Virtual seat travel requires full_travel_ms")?,
+        }),
         "pealayer.hardware.authority" => {
             let operation = string(&["operation"])?;
             if !matches!(operation.as_str(), "request" | "accept" | "reject" | "release" | "lock" | "unlock") {
@@ -3493,6 +3508,7 @@ fn run_pccontroller_action_bridge(
     let mut subscribed_host = String::new();
     let mut last_ping = Instant::now();
     let mut pending_ping: Option<(u64, Instant)> = None;
+    let mut virtual_buzzer = None;
     loop {
         if !push_target.is_alive() || push_target.websocket_endpoint().as_deref() != Some(endpoint)
         {
@@ -3551,6 +3567,12 @@ fn run_pccontroller_action_bridge(
                         continue;
                     };
                     let params = message.get("params").unwrap_or(&Value::Null);
+                    if method == "controller.state" && params["kind"] == "buzzer.note"
+                        && push_target.owns_virtual_board()
+                    {
+                        virtual_buzzer.get_or_insert_with(crate::four_d::virtual_buzzer::VirtualBuzzer::new)
+                            .play_event(params);
+                    }
                     if push_target.apply_notification(method, params) {
                         egui_ctx.request_repaint();
                     }

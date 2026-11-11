@@ -443,6 +443,7 @@ pub fn spawn(
     sample: Arc<Mutex<PlaybackSample>>,
     connected: Arc<AtomicBool>,
     endpoint: Arc<Mutex<String>>,
+    demo_address: Arc<Mutex<Option<String>>>,
     timeline: Arc<Mutex<super::media_timeline::PreparedTimeline>>,
     notifier: Arc<Mutex<Option<super::engine::StateNotifier>>>,
 ) {
@@ -473,10 +474,9 @@ pub fn spawn(
         loop {
             notify_sync_change(&timeline, &notifier, &mut previous_presentation);
             let alive = lifecycle.strong_count() > 0;
-            let requested_endpoint = endpoint.lock().map(|s| s.clone()).unwrap_or_default();
-            let usable = alive
-                && connected.load(Ordering::Relaxed)
-                && super::controller::is_controller_endpoint(&requested_endpoint);
+            let requested_endpoint = super::engine::selected_coordinator_endpoint(&endpoint, &demo_address)
+                .unwrap_or_default();
+            let usable = alive && connected.load(Ordering::Acquire) && !requested_endpoint.is_empty();
             if !usable || active_endpoint != requested_endpoint {
                 if let Some(mut old) = take_coordinator_session(&mut client, &timeline) {
                     sequence += 1;

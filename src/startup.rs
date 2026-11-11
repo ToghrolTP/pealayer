@@ -808,7 +808,6 @@ pub fn run() -> eframe::Result {
                 confirm_estop_release: loaded_config.confirm_estop_release,
                 show_estop_release_dialog: false,
                 skip_estop_release_confirmation_draft: false,
-                seat_kinematics: crate::four_d::seat_kinematics::CinemaSeatKinematics::default(),
                 show_digital_twin_window: false,
                 serial_port: loaded_config
                     .hardware_endpoint
@@ -942,6 +941,8 @@ pub fn run() -> eframe::Result {
                 right_hold_action: loaded_config.right_hold_action,
                 fullscreen_video_background: loaded_config.fullscreen_video_background,
                 motion_control_mode: loaded_config.motion_control_mode,
+                virtual_seat_travel_ms: loaded_config.virtual_seat_travel_ms,
+                virtual_buzzer_audio: loaded_config.virtual_buzzer_audio,
                 held_motion_action: None,
                 compact_hardware_controls: loaded_config.compact_hardware_controls,
                 compact_timeline_tracks: loaded_config.compact_timeline_tracks,

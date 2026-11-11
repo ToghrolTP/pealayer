@@ -80,7 +80,13 @@ fn hardware_monitor_scroll<R>(
 ) -> egui::scroll_area::ScrollAreaOutput<R> {
     // Dock scrolling is disabled for this panel: it owns one bounded vertical
     // viewport so cards cannot grow the panel or strand lower sections.
-    let output = sidebar_scroll(ui, "hardware-monitor-scroll", body);
+    let width = sidebar_content_width(ui.available_width());
+    let output = sidebar_scroll(ui, "hardware-monitor-scroll", |ui| {
+        let mut clip = ui.clip_rect();
+        clip.max.x = clip.max.x.min(ui.min_rect().left() + width);
+        ui.set_clip_rect(clip);
+        body(ui)
+    });
     // A release may target a folder in a later section; clear only after all
     // sections have had a chance to consume it.
     clear_released_hardware_channel_drag(ui, HardwareChannelDragSurface::Monitor);
@@ -6628,17 +6634,19 @@ fn hardware_section(
         };
         let response = ui.add(
             egui::Button::new(egui::RichText::new(format!("{caret}  {icon}  {title}")).strong())
-                .frame(false),
-        );
+                .frame(false).truncate(),
+        ).on_hover_text(title);
         if response.clicked() {
             open = !open;
         }
-        let (line, _) =
-            ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
-        ui.painter().line_segment(
-            [line.left_center(), line.right_center()],
-            ui.visuals().widgets.noninteractive.bg_stroke,
-        );
+        let width = ui.available_width().min(ui.clip_rect().right() - ui.cursor().left());
+        if width > 1.0 {
+            let (line, _) = ui.allocate_exact_size(egui::vec2(width, 1.0), egui::Sense::hover());
+            ui.painter().line_segment(
+                [line.left_center(), line.right_center()],
+                ui.visuals().widgets.noninteractive.bg_stroke,
+            );
+        }
     });
     ui.data_mut(|data| data.insert_persisted(id, open));
     if open {
@@ -6705,7 +6713,7 @@ fn buzzer_action_availability(connected: bool, pending: bool, estop: bool, playi
     (connected && !pending && !estop, connected && !pending && playing)
 }
 
-fn draw_buzzer_tool(
+pub(super) fn draw_buzzer_tool(
     app: &mut PealayerApp,
     ui: &mut egui::Ui,
     capabilities: &crate::four_d::controller::HardwareCapabilities,
@@ -7811,7 +7819,7 @@ fn draw_compact_control_card(
                         8.0
                     };
                     let response = hardware_header_widget(ui, &control.key, "caption", |ui| {
-                        aligned_click_label(ui, &title, (ui.available_width() - reserved).max(48.0), 24.0, 13.0,
+                        aligned_click_label(ui, &title, (ui.available_width() - reserved).max(1.0), 24.0, 13.0,
                             crate::ui::i18n::input_alignment(app.rtl, &control.name))
                     });
                     if response.clicked() {
@@ -8144,7 +8152,7 @@ fn draw_control_card(
                                             aligned_click_label(
                                                 ui,
                                                 &title_text,
-                                                ui.available_width().max(52.0),
+                                                ui.available_width().max(1.0),
                                                 24.0,
                                                 13.0,
                                                 crate::ui::i18n::input_alignment(app.rtl, &control.name),
@@ -15032,7 +15040,7 @@ impl<'a> PealayerTabViewer<'a> {
                             channel_folders::draw_dialogs(self.app, ui, capabilities);
                         }
                         ui.horizontal_wrapped(|ui| {
-                            ui.heading(self.app.tr("Hardware Monitor Dashboard"));
+                            ui.heading(self.app.tr("Hardware Monitor"));
                             if crate::ui::hardware_control::channel_manager_available(
                                 self.app.is_connected,
                                 capabilities.as_ref(),
@@ -15061,10 +15069,10 @@ impl<'a> PealayerTabViewer<'a> {
                         ui.add_space(8.0);
 
                         hardware_monitor_scroll(ui, |ui| {
-                        if crate::ui::hardware_monitor::live_board(self.app.is_connected,capabilities.as_ref()) && (crate::four_d::controller::is_demo_endpoint(&self.app.serial_port)
-                            || capabilities.as_ref().is_some_and(|c| c.board_name.contains("Virtual")))
+                        if crate::ui::hardware_monitor::live_board(self.app.is_connected,capabilities.as_ref())
+                            && let Some(caps) = capabilities.as_ref().filter(|caps| crate::ui::digital_twin::is_virtual_board(caps))
                         {
-                            crate::ui::digital_twin::draw_digital_twin_card(self.app, ui);
+                            crate::ui::digital_twin::draw_digital_twin_card(self.app, ui, caps);
                             ui.add_space(10.0);
                         }
                         // A retained catalog is not a live RF connection. Offline
@@ -15141,7 +15149,7 @@ impl<'a> PealayerTabViewer<'a> {
                                         - icon_width
                                         - status_width
                                         - spacing * 2.0)
-                                        .max(72.0);
+                                        .max(1.0);
                                     ui.allocate_ui_with_layout(
                                         egui::vec2(ui.available_width(), row_height),
                                         egui::Layout::left_to_right(egui::Align::Center),

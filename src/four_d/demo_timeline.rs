@@ -26,11 +26,11 @@ pub fn demo_media_target() -> Option<PathBuf> {
 pub fn build_demo_showcase_timeline() -> Timeline {
     let mut timeline = Timeline::default();
 
-    // 1. Template: Seat A Pitch Up
+    // Each cue drives one side of the same seat.
     let seat_a_pitch_id = Uuid::new_v4();
     let seat_a_pitch = Effect {
         id: seat_a_pitch_id,
-        name: "Seat A Pitch Up".to_string(),
+        name: "Left side up".to_string(),
         icon: "seat".to_string(),
         duration_ms: 1200,
         target: HardwareTarget::Any,
@@ -53,7 +53,7 @@ pub fn build_demo_showcase_timeline() -> Timeline {
     };
     let mut seat_b_pitch = seat_a_pitch.clone();
     seat_b_pitch.id = Uuid::new_v4();
-    seat_b_pitch.name = "Seat B Pitch Up".into();
+    seat_b_pitch.name = "Right side up".into();
     seat_b_pitch.duration_ms = 800;
     if let Some(direct) = seat_b_pitch.direct_control.as_mut() {
         direct.control_key = "seat.b".into();

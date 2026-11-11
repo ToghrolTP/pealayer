@@ -313,6 +313,12 @@ fn controller_call_allowed_during_estop(method: &str, params: &serde_json::Value
     if method == "controller.pwm.off" {
         return true;
     }
+    if method == "controller.front_panel" {
+        return true;
+    }
+    if method == "controller.front_panel.key" {
+        return params["hold_ms"].as_u64() == Some(0);
+    }
     if method != "controller.command.execute" {
         return false;
     }
@@ -543,7 +549,7 @@ pub struct EngineHandle {
     pub is_connected: Arc<AtomicBool>,
     pub serial_port: Arc<Mutex<String>>,
     pub active_transport: Arc<Mutex<Option<String>>>,
-    demo_coordinator_address: Arc<Mutex<Option<String>>>,
+    pub(super) demo_coordinator_address: Arc<Mutex<Option<String>>>,
     pub connection_error: Arc<Mutex<Option<String>>>,
     pub hardware_capabilities: Arc<Mutex<Option<crate::four_d::controller::HardwareCapabilities>>>,
     pub hardware_revision: Arc<AtomicU64>,
@@ -576,6 +582,10 @@ pub struct ControllerPushTarget {
 }
 
 impl EngineHandle {
+    pub(crate) fn coordinator_endpoint(&self) -> Option<String> {
+        selected_coordinator_endpoint(&self.serial_port, &self.demo_coordinator_address)
+    }
+
     pub fn set_state_notifier(&self, notify: impl Fn() + Send + Sync + 'static) {
         if let Ok(mut slot) = self.state_notifier.lock() { *slot = Some(Arc::new(notify)); }
     }
@@ -585,7 +595,7 @@ impl EngineHandle {
         if !self.is_connected.load(std::sync::atomic::Ordering::Acquire) {
             return false;
         }
-        if !self.serial_port.lock().is_ok_and(|endpoint| super::controller::is_controller_endpoint(&endpoint)) {
+        if self.coordinator_endpoint().is_none() {
             return false;
         }
         if let Ok(mut plan) = self.prepared_timeline.lock() && plan.has_items() && plan.may_publish() {
@@ -696,7 +706,29 @@ impl EngineHandle {
     }
 }
 
+pub(super) fn selected_coordinator_endpoint(
+    selected: &Mutex<String>,
+    demo_address: &Mutex<Option<String>>,
+) -> Option<String> {
+    let endpoint = selected.lock().ok()?;
+    if super::controller::is_demo_endpoint(&endpoint) {
+        demo_address.lock().ok()?.clone()
+    } else if super::controller::is_controller_endpoint(&endpoint) {
+        Some(endpoint.clone())
+    } else {
+        None
+    }
+}
+
 impl ControllerPushTarget {
+    pub(crate) fn owns_virtual_board(&self) -> bool {
+        self.serial_port.upgrade().is_some_and(|selected|
+            selected.lock().is_ok_and(|endpoint| super::controller::is_demo_endpoint(&endpoint)))
+            && self.hardware_capabilities.upgrade().is_some_and(|caps| caps.lock().is_ok_and(|caps|
+                caps.as_ref().is_some_and(|caps| caps.board_connected
+                    && caps.port.product == "PCController Virtual Board")))
+    }
+
     pub(crate) fn is_alive(&self) -> bool {
         self.lifecycle.strong_count() > 0
     }
@@ -1009,7 +1041,8 @@ pub fn spawn_engine() -> EngineHandle {
 
     let (tx, rx) = mpsc::channel();
     super::media_sync::spawn(Arc::downgrade(&lifecycle), Arc::clone(&media_playback),
-        Arc::clone(&is_connected), Arc::clone(&serial_port),Arc::clone(&prepared_timeline),
+        Arc::clone(&is_connected), Arc::clone(&serial_port), Arc::clone(&demo_coordinator_address),
+        Arc::clone(&prepared_timeline),
         Arc::clone(&state_notifier));
 
     let engine_time = Arc::clone(&playback_time_ms);
@@ -1062,6 +1095,9 @@ pub fn spawn_engine() -> EngineHandle {
                 &mut active_transport, &engine_connected,
                 &engine_transport_description, &engine_capabilities,
             );
+            if !connected && let Ok(mut address) = engine_demo_coordinator_address.lock() {
+                *address = None;
+            }
             engine_connected.store(connected, Ordering::Relaxed);
 
             // Handle connection/disconnection transitions
@@ -1291,7 +1327,7 @@ pub fn spawn_engine() -> EngineHandle {
             // Check for new messages (non-blocking)
             // Evaluate after connection changes, including the first connect.
             let coordinator_timeline = active_transport.as_ref()
-                .is_some_and(|transport| matches!(transport, HardwareTransport::Controller(_)));
+                .is_some_and(|transport| !transport.is_direct_serial());
             let mut channel_disconnected = false;
             loop {
                 let msg = match awakened_message.take().map(Ok).unwrap_or_else(|| rx.try_recv()) {
@@ -1510,6 +1546,10 @@ pub fn spawn_engine() -> EngineHandle {
                         let result = if deadline.is_some_and(|deadline| std::time::Instant::now()>=deadline) {
                             let mut error: super::controller::ControllerRpcError="hardware command expired before dispatch".to_string().into();
                             error.outcome=Some("rejected".into());Err(error)
+                        } else if operation.starts_with("board-virtual-seat-travel:")
+                            && !matches!(active_transport, Some(HardwareTransport::Demo(_)))
+                        {
+                            Err("The local Virtual Board connection changed before applying seat travel".to_string().into())
                         } else if engine_estop.load(Ordering::SeqCst)
                             && !controller_call_allowed_during_estop(&method, &params)
                         {
