@@ -60,6 +60,27 @@ an announcement never silently changes the board owner or selected coordinator.
 
 ## Standard LAN discovery alongside binary UDP
 
+### Shared peer discovery contract
+
+- Browse `_lan-peer._tcp.local.` over mDNS. The SRV port is the HTTP listener.
+  TXT `product` identifies the endpoint and `health=/healthz` describes its
+  read-only verification route.
+- For SSDP, send `M-SEARCH` with `ST: ssdp:all`. A responder can include
+  `X-Digitalogic-Discovery: lan-peer` and its own `X-Digitalogic-Product`.
+  A standard UPnP root or Basic response can omit those headers. Its
+  `LOCATION` must match the packet source and identify the actual HTTP port.
+- Verify with a bounded, direct `GET /healthz` on the advertised endpoint.
+  Require `status: "ok"`, `discovery: "lan-peer"`, and a matching product
+  token when one was advertised. Use `product_id` when present, otherwise
+  `product`. Tokens start with a lowercase ASCII letter, contain lowercase
+  letters, digits or hyphens, and are at most 48 bytes.
+- Preserve verification evidence from each protocol. A verified record
+  provides identity and reachability for discovery. Connection, pairing,
+  board ownership, and command authorization keep their own checks.
+
+Existing service records continue to serve their existing clients. A peer
+can publish the shared record using only its own product identity.
+
 The shared Flutter design rejection is recorded in root `AGENTS.md`. Native
 Pealayer browses for peers using DNS-SD over mDNS and SSDP even with a
 loopback-only Web/API listener. It advertises `_pealayer._tcp.local.` and

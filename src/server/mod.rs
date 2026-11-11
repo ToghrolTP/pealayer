@@ -995,7 +995,7 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
         ("GET", "/healthz") => HttpResponse::json(
             200,
             "OK",
-            r#"{"status":"ok","service":"pealayer","rpc":"2.0"}"#,
+            r#"{"status":"ok","service":"pealayer","product":"pealayer","discovery":"lan-peer","rpc":"2.0"}"#,
         ),
         ("GET", "/api/discovery") => HttpResponse::json(200, "OK",
             serde_json::json!({"product":"pealayer","version":env!("CARGO_PKG_VERSION"),

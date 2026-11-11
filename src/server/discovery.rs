@@ -15,6 +15,8 @@ use std::{
 const PEALAYER_TYPE: &str = "urn:digitalogic-ir:device:Pealayer:1";
 const PC_TYPE: &str = "urn:pccontroller-org:service:Controller:1";
 const MOBILE_TYPE: &str = "urn:digitalogic-ir:device:ControllerMobile:1";
+const PEER_SERVICE: &str = "_lan-peer._tcp.local.";
+const PEER_CLASS: &str = "lan-peer";
 const SSDP_GROUP: Ipv4Addr = Ipv4Addr::new(239, 255, 255, 250);
 const SSDP_PORT: u16 = 1900;
 const SSDP_SEARCH: &[u8] = b"M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 1\r\nST: ssdp:all\r\n\r\n";
@@ -81,12 +83,20 @@ struct Candidate {
     name: String,
     product: String,
     protocol: &'static str,
+    generic: bool,
 }
 fn local_source(address: SocketAddr) -> bool {
     matches!(address.ip(), IpAddr::V4(ip) if (ip.is_private() || ip.is_link_local()) && !ip.is_loopback() && !ip.is_broadcast() && address.port()!=0)
 }
 fn product_ok(value: &str) -> bool {
     matches!(value, "pccontroller" | "pealayer" | "controller-mobile")
+}
+fn peer_product(value: &str) -> bool {
+    (1..=48).contains(&value.len())
+        && value.as_bytes()[0].is_ascii_lowercase()
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 impl Registry {
     fn admit(&mut self, candidate: &Candidate, now: Instant) -> bool {
@@ -105,7 +115,11 @@ impl Registry {
 }
 fn offer(queue: &mpsc::SyncSender<Candidate>, candidate: Candidate) {
     if !local_source(candidate.address)
-        || !product_ok(&candidate.product)
+        || !(if candidate.generic {
+            candidate.product.is_empty() || peer_product(&candidate.product)
+        } else {
+            product_ok(&candidate.product)
+        })
         || candidate.name.len() > 96
     {
         return;
@@ -175,12 +189,9 @@ fn verify(candidate: Candidate) {
         }
         health = json!({"product":"pccontroller","status":"ok"});
     }
-    if health["status"] != "ok"
-        || health["product"].as_str().or(health["service"].as_str())
-            != Some(candidate.product.as_str())
-    {
+    let Some(product) = verified_product(&candidate, &health) else {
         return;
-    }
+    };
     if let Ok(mut r) = registry().lock() {
         r.peers
             .retain(|_, (at, _)| at.elapsed() < Duration::from_secs(120));
@@ -189,17 +200,33 @@ fn verify(candidate: Candidate) {
             let mut protocols = r
                 .peers
                 .get(&key)
-                .filter(|(_, v)| v["product"] == candidate.product)
+                .filter(|(_, v)| v["product"] == product)
                 .and_then(|(_, v)| v["protocols"].as_array())
                 .cloned()
                 .unwrap_or_default();
             if !protocols.contains(&json!(candidate.protocol)) {
                 protocols.push(json!(candidate.protocol));
             }
-            r.peers.insert(key,(Instant::now(),json!({"name":candidate.name,"product":candidate.product,
+            r.peers.insert(key,(Instant::now(),json!({"name":candidate.name,"product":product,
                 "endpoint":format!("http://{}",candidate.address),"verified":true,"protocols":protocols})));
         }
     }
+}
+
+fn verified_product<'a>(candidate: &Candidate, health: &'a Value) -> Option<&'a str> {
+    let product = if candidate.generic {
+        let product = health["product_id"]
+            .as_str()
+            .or(health["product"].as_str())?;
+        if health["discovery"] != PEER_CLASS || !peer_product(product) {
+            return None;
+        }
+        product
+    } else {
+        health["product"].as_str().or(health["service"].as_str())?
+    };
+    (health["status"] == "ok" && (candidate.product.is_empty() || candidate.product == product))
+        .then_some(product)
 }
 
 /// Browse even with a loopback-only Web listener. Advertising a Pealayer
@@ -291,26 +318,28 @@ fn start_mdns(
         let monitor = daemon.monitor().map_err(|e| e.to_string())?;
         if let Some((port, addresses)) = advertised {
             // Explicit addresses: never advertise a loopback/non-listening NIC.
-            let service = ServiceInfo::new(
-                "_pealayer._tcp.local.",
-                name,
-                &format!("pealayer-{}.local.", &id[..12]),
-                addresses
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(","),
-                *port,
-                [
-                    ("product", "pealayer"),
-                    ("path", "/api/ipc"),
-                    ("health", "/healthz"),
-                    ("instance", id),
-                ]
-                .as_slice(),
-            )
-            .map_err(|e| e.to_string())?;
-            daemon.register(service).map_err(|e| e.to_string())?;
+            for kind in ["_pealayer._tcp.local.", PEER_SERVICE] {
+                let service = ServiceInfo::new(
+                    kind,
+                    name,
+                    &format!("pealayer-{}.local.", &id[..12]),
+                    addresses
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(","),
+                    *port,
+                    [
+                        ("product", "pealayer"),
+                        ("path", "/api/ipc"),
+                        ("health", "/healthz"),
+                        ("instance", id),
+                    ]
+                    .as_slice(),
+                )
+                .map_err(|e| e.to_string())?;
+                daemon.register(service).map_err(|e| e.to_string())?;
+            }
         }
         thread::spawn(move || {
             while let Ok(event) = monitor.recv() {
@@ -327,6 +356,7 @@ fn start_mdns(
             ("_pccontroller._tcp.local.", "pccontroller"),
             ("_pealayer._tcp.local.", "pealayer"),
             ("_digitalogic._tcp.local.", "controller-mobile"),
+            (PEER_SERVICE, ""),
         ] {
             let receiver = daemon.browse(kind).map_err(|e| e.to_string())?;
             let queue = queue.clone();
@@ -337,6 +367,18 @@ fn start_mdns(
                         active("dns-sd");
                     }
                     if let ServiceEvent::ServiceResolved(service) = event {
+                        let generic = kind == PEER_SERVICE;
+                        let product = if generic {
+                            let Some(product) = service
+                                .get_property_val_str("product")
+                                .filter(|p| peer_product(p))
+                            else {
+                                continue;
+                            };
+                            product
+                        } else {
+                            product
+                        };
                         for address in service.get_addresses_v4() {
                             offer(
                                 &queue,
@@ -352,6 +394,7 @@ fn start_mdns(
                                         .collect(),
                                     product: product.into(),
                                     protocol: "dns-sd",
+                                    generic,
                                 },
                             );
                         }
@@ -533,7 +576,7 @@ fn start_ssdp_responder(advertised: &[Ipv4Addr], port: u16, name: String, id: St
             if let Some((reply, ip)) = ssdp_reply_socket(source, &advertised) {
                 replies.insert(source, Instant::now());
                 let response = format!(
-                    "HTTP/1.1 200 OK\r\nCACHE-CONTROL: max-age=60\r\nEXT:\r\nST: {PEALAYER_TYPE}\r\nUSN: uuid:{id}::{PEALAYER_TYPE}\r\nLOCATION: http://{ip}:{port}/api/discovery\r\nX-Digitalogic-Product: pealayer\r\nX-Digitalogic-Name: {name}\r\n\r\n"
+                    "HTTP/1.1 200 OK\r\nCACHE-CONTROL: max-age=60\r\nEXT:\r\nST: {PEALAYER_TYPE}\r\nUSN: uuid:{id}::{PEALAYER_TYPE}\r\nLOCATION: http://{ip}:{port}/api/discovery\r\nX-Digitalogic-Discovery: {PEER_CLASS}\r\nX-Digitalogic-Product: pealayer\r\nX-Digitalogic-Name: {name}\r\n\r\n"
                 );
                 let _ = reply.send(response.as_bytes());
             }
@@ -658,6 +701,7 @@ fn parse_mndp(packet: &[u8], source: SocketAddr) -> Option<Candidate> {
         name,
         product,
         protocol: "mndp",
+        generic: false,
     })
 }
 fn parse_ssdp(packet: &[u8], source: SocketAddr) -> Option<Candidate> {
@@ -677,11 +721,25 @@ fn parse_ssdp(packet: &[u8], source: SocketAddr) -> Option<Candidate> {
             }
         }
     }
-    let product = match *headers.get("st")? {
-        PC_TYPE => "pccontroller",
-        PEALAYER_TYPE => "pealayer",
-        MOBILE_TYPE => "controller-mobile",
-        _ => return None,
+    let target = *headers.get("st")?;
+    let generic = headers.get("x-digitalogic-discovery") == Some(&PEER_CLASS)
+        || matches!(
+            target,
+            "urn:schemas-upnp-org:device:Basic:1" | "upnp:rootdevice"
+        );
+    let product = if generic {
+        match headers.get("x-digitalogic-product").copied() {
+            Some(value) if peer_product(value) => value,
+            Some(_) => return None,
+            None => "",
+        }
+    } else {
+        match target {
+            PC_TYPE => "pccontroller",
+            PEALAYER_TYPE => "pealayer",
+            MOBILE_TYPE => "controller-mobile",
+            _ => return None,
+        }
     };
     let url = url::Url::parse(headers.get("location")?).ok()?;
     if url.scheme() != "http"
@@ -703,12 +761,36 @@ fn parse_ssdp(packet: &[u8], source: SocketAddr) -> Option<Candidate> {
             .collect(),
         product: product.into(),
         protocol: "ssdp",
+        generic,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generic_ssdp_uses_verified_product_instead_of_a_product_list() {
+        let wire = b"HTTP/1.1 200 OK\r\nST: upnp:rootdevice\r\nLOCATION: http://192.168.1.20/description.xml\r\n\r\n";
+        let source = ([192, 168, 1, 20], 1900).into();
+        let mut candidate = parse_ssdp(wire, source).unwrap();
+        let health = json!({"status":"ok","discovery":"lan-peer","product":"fixture-device"});
+        assert!(candidate.generic);
+        assert_eq!(
+            verified_product(&candidate, &health),
+            Some("fixture-device")
+        );
+        assert_eq!(
+            verified_product(
+                &candidate,
+                &json!({"status":"ok","product":"fixture-device"})
+            ),
+            None
+        );
+        candidate.product = "different-device".into();
+        assert_eq!(verified_product(&candidate, &health), None);
+        assert!(parse_ssdp(wire, ([192, 168, 1, 21], 1900).into()).is_none());
+    }
 
     #[test]
     fn endpoint_can_be_verified_over_both_protocols_in_either_order() {
@@ -720,6 +802,7 @@ mod tests {
                 name: "Pealayer".into(),
                 product: "pealayer".into(),
                 protocol: protocols[0],
+                generic: false,
             };
             assert!(registry.admit(&candidate, now));
             assert!(!registry.admit(&candidate, now));
