@@ -50,3 +50,13 @@ The LCD fixture pushed both 16-character rows from the firmware at I²C address
 Read-only PCController catalog queries against the physical cinema profile
 confirmed `seat.a` as Seat Left and `seat.b` as Seat Right, with raw seat
 relays hidden. The private Virtual Board uses those same defaults.
+The bundled jellyfish clip was opened from the File menu on the final Windows
+build. The native Virtual Board applied both seat cues and energized Relay 5
+through the normal timeline executor. The two views showed the independent
+left and right positions from those events. In an earlier run with a release
+build compiling at the same time, the timing guard paused playback after a
+late controller read. The demo replay passed after compilation finished.
+
+The [docked 2D capture](../screenshots/virtual-board-twin-2d.png) shows the
+firmware LCD and both seat profiles. The [floating 3D capture](../screenshots/virtual-board-twin-3d.png)
+shows those same positions after rotating the view.
