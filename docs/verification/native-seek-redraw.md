@@ -13,10 +13,12 @@ its client surface with the active opaque panel color before drawing.
 
 ## Windows verification
 
-- Installed build `a1939dfa0` and candidate `12d0c481` both settled ten paused
+- Installed build `e2c9e06e` and candidate `12d0c481` both settled ten paused
   seeks, including zero and sub-frame positions. Both resumed from the final
   target after a series of scrub previews. Neither reported a libmpv render or
   update error during that sequence.
+- The focused Windows seek test run passed 52 tests. The opt-in thumbnail
+  decoder test was skipped.
 - The same synthetic media, Studio dark palette, NVIDIA OpenGL renderer and
   980 × 680 logical-point client were used for the native seekbar comparison.
   The user repeated the seek on the candidate and reported no flash.
