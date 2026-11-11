@@ -43,11 +43,7 @@ fn test_virtual_board_demo_full_lifecycle() {
     let pwm_res = session.client.call("controller.pwm.set", serde_json::json!({"channel": 0, "raw_value": 2048}));
     assert!(pwm_res.is_ok(), "PWM set execution must succeed");
 
-    // 5. Verify engine does not block playback with coordinator timeline requirement
-    let engine = pealayer::four_d::engine::spawn_engine();
-    *engine.serial_port.lock().unwrap() = DEMO_ENDPOINT.to_string();
-    assert!(!engine.request_prepared_play(), "Demo mode must not require prepared coordinator timeline arming");
-
-    // 6. Clean teardown
+    // 5. Clean teardown. This fixture owns the coordinator directly; the
+    // media-clock tests cover arming through the connected Pealayer engine.
     drop(session);
 }
