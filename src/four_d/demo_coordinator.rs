@@ -107,27 +107,30 @@ impl DemoCoordinatorSession {
         std::fs::create_dir(&temp_root).map_err(|e| format!("create demo coordinator temp root: {e}"))?;
         let temp_root = DemoDataRoot(temp_root);
 
+        let config_path = temp_root.0.join("config.json");
+        // The private coordinator uses the normal host contract without
+        // broadcasting or opening local physical-device integrations.
+        let travel_ms = crate::platform::interop::get_live_config().virtual_seat_travel_ms.clamp(100, 60_000);
+        let config = json!({
+            "connection": { "virtual_seat_travel_ms": travel_ms },
+            "peripheral_names": { "seat.a": "Left side", "seat.b": "Right side" },
+            "integrations": {
+                "discovery": {
+                    "mndp_enabled": false,
+                    "mdns_enabled": false,
+                    "dns_sd_enabled": false,
+                    "ssdp_enabled": false,
+                    "upnp_enabled": false,
+                    "ws_discovery_enabled": false,
+                    "broadcast_enabled": false,
+                    "netbios_enabled": false
+                },
+                "local_device": { "enabled": false }
+            }
+        });
+        std::fs::write(&config_path, config.to_string())
+            .map_err(|error| format!("write isolated demo controller configuration: {error}"))?;
         let (supervisor, client) = if let Some(binary) = resolve_controller_binary() {
-            let config_path = temp_root.0.join("config.json");
-            // The host's discovery defaults apply even to a loopback IPC listener.
-            // A demonstration should neither announce itself nor open LAN sockets.
-            let config = json!({
-                "integrations": {
-                    "discovery": {
-                        "mndp_enabled": false,
-                        "mdns_enabled": false,
-                        "dns_sd_enabled": false,
-                        "ssdp_enabled": false,
-                        "upnp_enabled": false,
-                        "ws_discovery_enabled": false,
-                        "broadcast_enabled": false,
-                        "netbios_enabled": false
-                    },
-                    "local_device": { "enabled": false }
-                }
-            });
-            std::fs::write(&config_path, config.to_string())
-                .map_err(|error| format!("write isolated demo controller configuration: {error}"))?;
             let mut last_err = String::new();
             let mut started = None;
 

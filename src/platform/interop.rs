@@ -3493,6 +3493,7 @@ fn run_pccontroller_action_bridge(
     let mut subscribed_host = String::new();
     let mut last_ping = Instant::now();
     let mut pending_ping: Option<(u64, Instant)> = None;
+    let mut virtual_buzzer = None;
     loop {
         if !push_target.is_alive() || push_target.websocket_endpoint().as_deref() != Some(endpoint)
         {
@@ -3551,6 +3552,12 @@ fn run_pccontroller_action_bridge(
                         continue;
                     };
                     let params = message.get("params").unwrap_or(&Value::Null);
+                    if method == "controller.state" && params["kind"] == "buzzer.note"
+                        && push_target.owns_virtual_board()
+                    {
+                        virtual_buzzer.get_or_insert_with(crate::four_d::virtual_buzzer::VirtualBuzzer::new)
+                            .play_event(params);
+                    }
                     if push_target.apply_notification(method, params) {
                         egui_ctx.request_repaint();
                     }

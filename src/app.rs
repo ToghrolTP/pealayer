@@ -759,7 +759,6 @@ pub struct PealayerApp {
     pub(crate) confirm_estop_release: bool,
     pub(crate) show_estop_release_dialog: bool,
     pub(crate) skip_estop_release_confirmation_draft: bool,
-    pub seat_kinematics: crate::four_d::seat_kinematics::CinemaSeatKinematics,
     pub show_digital_twin_window: bool,
     pub(crate) serial_port: String,
     pub(crate) is_connected: bool,
@@ -874,6 +873,8 @@ pub struct PealayerApp {
     pub(crate) right_hold_action: crate::config::PlayerDragAction,
     pub(crate) fullscreen_video_background: crate::config::VideoBackground,
     pub(crate) motion_control_mode: crate::config::MotionControlMode,
+    pub(crate) virtual_seat_travel_ms: u32,
+    pub(crate) virtual_buzzer_audio: bool,
     pub(crate) held_motion_action: Option<(String, String, String)>,
     pub(crate) compact_hardware_controls: bool,
     pub(crate) compact_timeline_tracks: bool,
@@ -1280,7 +1281,6 @@ impl eframe::App for PealayerApp {
             &self.media_tracks,
         );
         self.sync_window_level(ctx);
-        self.tick_virtual_board_kinematics(ctx);
 
         if self.is_scrubbing || self.pending_scrub_commit.is_some() {
             // A paused libmpv surface still needs paint opportunities while a
@@ -2980,8 +2980,7 @@ impl PealayerApp {
 
     fn tray_board_menu(&self) -> Option<crate::platform::tray_board::BoardTrayMenu> {
         // Direct UART diagnostics must not create a PCController tray surface.
-        let coordinator = crate::peer::active() || self.engine_handle.serial_port.lock()
-            .is_ok_and(|endpoint| crate::four_d::controller::is_controller_endpoint(&endpoint));
+        let coordinator = crate::peer::active() || self.engine_handle.coordinator_endpoint().is_some();
         crate::platform::tray_board::BoardTrayMenu::build(
             self.advertised_hardware().as_ref(),
             coordinator && self.engine_handle.is_connected.load(Ordering::Acquire),
@@ -3041,61 +3040,6 @@ impl PealayerApp {
                 command.to_string(),
             ))
             .map_err(|e| e.to_string())
-    }
-
-    pub(crate) fn tick_virtual_board_kinematics(&mut self, ctx: &egui::Context) {
-        let dt = ctx.input(|i| i.stable_dt);
-        if dt <= 0.0 {
-            return;
-        }
-
-        let (left_dir, right_dir, door_open) = if let Some(caps) = self.advertised_hardware() {
-            let (l, r) = if let Some(ref m) = caps.motion {
-                let l_val = match m.left.applied.as_str() {
-                    "up" => 1.0,
-                    "down" => -1.0,
-                    _ => 0.0,
-                };
-                let r_val = match m.right.applied.as_str() {
-                    "up" => 1.0,
-                    "down" => -1.0,
-                    _ => 0.0,
-                };
-                (l_val, r_val)
-            } else {
-                let l = if caps.active_relays.contains(&1) {
-                    1.0
-                } else if caps.active_relays.contains(&2) {
-                    -1.0
-                } else {
-                    0.0
-                };
-                let r = if caps.active_relays.contains(&3) {
-                    1.0
-                } else if caps.active_relays.contains(&4) {
-                    -1.0
-                } else {
-                    0.0
-                };
-                (l, r)
-            };
-            let door = caps.telemetry.door_open.unwrap_or(false);
-            (l, r, door)
-        } else {
-            (0.0, 0.0, false)
-        };
-
-        let interlock = door_open || self.estop_active;
-        self.seat_kinematics.update(dt, left_dir, right_dir, interlock);
-
-        if !interlock && (
-            (left_dir > 0.0 && self.seat_kinematics.left_stroke < 1.0)
-            || (left_dir < 0.0 && self.seat_kinematics.left_stroke > 0.0)
-            || (right_dir > 0.0 && self.seat_kinematics.right_stroke < 1.0)
-            || (right_dir < 0.0 && self.seat_kinematics.right_stroke > 0.0)
-        ) {
-            ctx.request_repaint();
-        }
     }
 
     fn process_shell_commands(&mut self, ctx: &egui::Context) {
@@ -3976,6 +3920,25 @@ impl PealayerApp {
         Ok(())
     }
 
+    pub(crate) fn set_virtual_seat_travel(&mut self, milliseconds: u32) -> Result<(), String> {
+        if !crate::four_d::controller::is_demo_endpoint(&self.serial_port) || crate::peer::active()
+            || !self.advertised_hardware().is_some_and(|caps| caps.board_connected
+                && caps.port.product == "PCController Virtual Board")
+        {
+            return Err("The local Virtual Board is not connected".into());
+        }
+        if !(100..=60_000).contains(&milliseconds) {
+            return Err("Virtual seat travel must be between 100 and 60000 ms".into());
+        }
+        self.request_board_operation(
+            &format!("board-virtual-seat-travel:{milliseconds}"),
+            "controller.command.execute",
+            serde_json::json!({
+                "command": format!("config set connection.virtual_seat_travel_ms {milliseconds}")
+            }),
+        )
+    }
+
     pub(crate) fn play_buzzer_melody(
         &mut self,
         name: &str,
@@ -4082,6 +4045,13 @@ impl PealayerApp {
     }
 
     pub(crate) fn press_front_panel_key(&mut self, key: &str) -> Result<(), String> {
+        if let Some(caps) = self.advertised_hardware().filter(|caps|
+            caps.board_connected && caps.port.product == "PCController Virtual Board")
+        {
+            let key = key.strip_prefix('K').and_then(|value| value.parse::<u8>().ok())
+                .filter(|key| (1..=4).contains(key)).ok_or("Invalid front-panel key")?;
+            return self.virtual_front_panel_key(&caps, key, 130);
+        }
         let host_captured = self
             .engine_handle
             .hardware_capabilities
@@ -4105,6 +4075,26 @@ impl PealayerApp {
             self.front_panel_pending_key = None;
         }
         result
+    }
+
+    pub(crate) fn virtual_front_panel_key(
+        &self,
+        caps: &crate::four_d::controller::HardwareCapabilities,
+        key: u8,
+        hold_ms: u16,
+    ) -> Result<(), String> {
+        if !self.is_connected || !caps.board_connected || !caps.supports_virtual_panel_keys
+            || caps.port.product != "PCController Virtual Board"
+        {
+            return Err("The connected board does not support virtual front-panel keys".into());
+        }
+        self.engine_handle.request_controller_call_before(
+            "virtual-front-panel-key",
+            "controller.front_panel.key",
+            serde_json::json!({"key":key, "hold_ms":hold_ms,
+                "expected_connection_generation":caps.connection_generation}),
+            Some(std::time::Instant::now() + std::time::Duration::from_millis(250)),
+        )
     }
 
     pub(crate) fn refresh_front_panel(&mut self) -> Result<(), String> {
@@ -4156,6 +4146,10 @@ impl PealayerApp {
                 }
                 continue;
             }
+            if result.operation == "virtual-front-panel-key" {
+                if let Err(error) = result.result { self.set_osd(error); }
+                continue;
+            }
             let is_board_operation = result.operation.starts_with("board-");
             let is_presentation_operation = result.operation.starts_with("presentation-");
             if is_board_operation {
@@ -4169,6 +4163,13 @@ impl PealayerApp {
             }
             match result.result {
                 Ok(value) => {
+                    if let Some(milliseconds) = result.operation.strip_prefix("board-virtual-seat-travel:")
+                        .and_then(|value| value.parse::<u32>().ok())
+                    {
+                        self.virtual_seat_travel_ms = milliseconds;
+                        self.save_config();
+                        self.engine_handle.request_catalog_refresh();
+                    }
                     let front_panel_apply_error = if result.operation == "board-front-panel-refresh"
                     {
                         self.engine_handle
@@ -5287,7 +5288,7 @@ impl PealayerApp {
                 let endpoint=self.serial_port.trim().to_string();
                 if connected && endpoint.is_empty() {self.set_osd(self.tr("Enter a hardware endpoint before connecting."));return;}
                 if connected && crate::four_d::controller::is_demo_endpoint(&endpoint) {
-                    self.start_virtual_board_demo();
+                    self.start_virtual_board(false);
                     return;
                 }
                 self.connection_notice=None;
@@ -7541,9 +7542,6 @@ impl PealayerApp {
             self.connection_notice = Some(self.tr("Enter a hardware endpoint before connecting."));
             return;
         }
-        if crate::four_d::controller::is_demo_endpoint(&endpoint) {
-            self.prepare_virtual_board_showcase();
-        }
         if let Ok(mut selected) = self.engine_handle.serial_port.lock() {
             *selected = endpoint;
         }
@@ -7555,14 +7553,15 @@ impl PealayerApp {
         self.save_config();
     }
 
-    pub fn start_virtual_board_demo(&mut self) {
+    pub fn start_virtual_board(&mut self, showcase: bool) {
         if crate::peer::active() || self.is_connected
             || self.engine_handle.connection_requested.load(Ordering::Relaxed)
         {
-            self.set_osd(self.tr("Disconnect the current hardware or remote session before starting the demo."));
+            self.set_osd(self.tr("Disconnect the current hardware or remote session before starting Virtual Board."));
             return;
         }
         self.serial_port = crate::four_d::controller::DEMO_ENDPOINT.to_string();
+        if showcase { self.prepare_virtual_board_showcase(); }
         self.request_hardware_connection();
     }
 
@@ -7784,6 +7783,8 @@ impl PealayerApp {
         cfg.right_hold_action = self.right_hold_action;
         cfg.fullscreen_video_background = self.fullscreen_video_background;
         cfg.motion_control_mode = self.motion_control_mode;
+        cfg.virtual_seat_travel_ms = self.virtual_seat_travel_ms;
+        cfg.virtual_buzzer_audio = self.virtual_buzzer_audio;
         cfg.compact_hardware_controls = self.compact_hardware_controls;
         cfg.compact_timeline_tracks = self.compact_timeline_tracks;
         cfg.timeline_hide_cue_text_overflow = self.timeline_hide_cue_text_overflow;
@@ -8195,6 +8196,8 @@ impl PealayerApp {
         self.right_hold_action = config.right_hold_action;
         self.fullscreen_video_background = config.fullscreen_video_background;
         self.motion_control_mode = config.motion_control_mode;
+        self.virtual_seat_travel_ms = config.virtual_seat_travel_ms;
+        self.virtual_buzzer_audio = config.virtual_buzzer_audio;
         self.compact_hardware_controls = config.compact_hardware_controls;
         self.compact_timeline_tracks = config.compact_timeline_tracks;
         self.timeline_hide_cue_text_overflow = config.timeline_hide_cue_text_overflow;
@@ -10156,11 +10159,19 @@ fn web_hardware_details(
         "status_led_override": capabilities.status_led_override,
         "settings": settings,
         "front_panel": front_panel,
+        "virtual_seats": capabilities.virtual_seats.as_ref().map(|sample| {
+            let [left_position, right_position] = sample.positions();
+            serde_json::json!({
+                "left_position": left_position, "right_position": right_position,
+                "full_travel_ms": sample.full_travel_ms,
+            })
+        }),
         "strip": strip,
         "supports": {
             "rf_transmit": capabilities.supports_rf_transmit,
             "segment_display": capabilities.supports_segment_display,
             "lcd_display": capabilities.supports_lcd_display,
+            "virtual_panel_keys": capabilities.supports_virtual_panel_keys,
             "addressable_led": capabilities.supports_addressable_led,
             "persistent_settings": capabilities.supports_persistent_settings,
             "measurements": capabilities.supports_measurements,
@@ -10448,7 +10459,6 @@ impl Default for PealayerApp {
             confirm_estop_release: true,
             show_estop_release_dialog: false,
             skip_estop_release_confirmation_draft: false,
-            seat_kinematics: crate::four_d::seat_kinematics::CinemaSeatKinematics::default(),
             show_digital_twin_window: false,
             serial_port: String::new(),
             is_connected: false,
@@ -10572,6 +10582,8 @@ impl Default for PealayerApp {
             right_hold_action: crate::config::PlayerDragAction::Seek,
             fullscreen_video_background: crate::config::VideoBackground::Black,
             motion_control_mode: crate::config::MotionControlMode::Hold,
+            virtual_seat_travel_ms: 3_000,
+            virtual_buzzer_audio: true,
             held_motion_action: None,
             compact_hardware_controls: false,
             compact_timeline_tracks: true,

@@ -368,6 +368,7 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
     let sample = handle.media_playback.clone();
     let plan = handle.prepared_timeline.clone();
     let endpoint = handle.serial_port.clone();
+    let demo_address = handle.demo_coordinator_address.clone();
     let estop = handle.estop_active.clone();
     let error = handle.connection_error.clone();
     let connected = handle.is_connected.clone();
@@ -419,9 +420,7 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                 .filter(|value| value.is_finite() && *value > 0.0);
             let coordinator = connected.load(std::sync::atomic::Ordering::Acquire)
                 && plan.lock().is_ok_and(|plan|plan.may_publish())
-                && endpoint
-                    .lock()
-                    .is_ok_and(|value| super::controller::is_controller_endpoint(&value));
+                && engine::selected_coordinator_endpoint(&endpoint, &demo_address).is_some();
             let mut set_pause = None;
             let handoff_pause = plan.lock().is_ok_and(|plan| plan.authority.as_ref()
                 .is_some_and(|state| state.unattended_claim(&plan.authority_client_id, unattended).is_some()));
