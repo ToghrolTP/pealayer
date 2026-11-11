@@ -1,9 +1,5 @@
 # 🚧 Next Pealayer release
 
-The merged-source milestone is [v0.11.0-alpha.1](v0.11.0-alpha.1.md). Historical releases and their exact acceptance limits are in the [version index](README.md).
+The current milestone is [v0.12.0-alpha.1](v0.12.0-alpha.1.md). See the [version index](README.md) for published checkpoints and [current acceptance](../verification/CURRENT-ACCEPTANCE.md) for remaining operational work.
 
-Subsequent command-tool completion (#277) and proportional/tabular FPS alignment (#278) remain unmerged at the pinned backfill checkpoint. Project/scene restoration (#227) remains a draft; FilmCraft (#248) remains user-held. Do not ship or attribute these as part of v0.11.0-alpha.1.
-
-Before the next release, choose a new semantic version, align the package version, add curated notes, verify the exact platform artifacts and update [current acceptance](../verification/CURRENT-ACCEPTANCE.md). Never reuse a timestamped build label or silently advance an existing tag.
-
-Use the [polished release-note template](TEMPLATE.md) for the next version: retain the milestone emoji, ✨ additions, 🛠️ fixes, 🧪 experiments, 🐞 known problems, 📦 packages, 📸 genuine captures and 🔗 PR/issue references.
+Publish on major integrated checkpoints after the relevant runtime checks and platform matrix pass. Group smaller fixes into the next checkpoint. Align the package version, add [curated notes](TEMPLATE.md), and tag the verified source with a new semantic version. Verify the published archives, checksums and provenance, then update the release ledger.
