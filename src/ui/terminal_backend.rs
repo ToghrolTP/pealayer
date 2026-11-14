@@ -1390,7 +1390,7 @@ mod tests {
         let session = Session::spawn(fixture_target(), 24, 80, egui::Context::default()).unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         let mut bytes = Vec::new();
-        let mut parser = vt100::Parser::new(24, 80, 100);
+        let mut parser = vt100::Parser::new(24.try_into().unwrap(), 80.try_into().unwrap(), 100);
         let mut query_tail = [0; 4];
         let mut ready = false;
         let mut sent = false;
@@ -1414,7 +1414,7 @@ mod tests {
                 }
             }
             if !sent && String::from_utf8_lossy(&bytes).contains("PTY-FIXTURE-READY") {
-                parser.set_size(36, 120);
+                parser.set_size(36.try_into().unwrap(), 120.try_into().unwrap());
                 session
                     .send(Input::Resize {
                         rows: 36,
@@ -1452,7 +1452,7 @@ mod tests {
         let session = Session::spawn(fixture_target(), 24, 80, egui::Context::default()).unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         let mut bytes = Vec::new();
-        let mut parser = vt100::Parser::new(24, 80, 100);
+        let mut parser = vt100::Parser::new(24.try_into().unwrap(), 80.try_into().unwrap(), 100);
         let mut query_tail = [0; 4];
         while std::time::Instant::now() < deadline
             && !String::from_utf8_lossy(&bytes).contains("PTY-FIXTURE-READY")

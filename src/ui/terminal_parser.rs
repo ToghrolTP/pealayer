@@ -1,18 +1,34 @@
 //! VT state plus an independent semantic-foreground mask. No RGB/index value
 //! doubles as a role in the actual screen; ordinary cyan/violet stay ordinary.
 //! Only embedded/paired PortableShell screens pay for the second bounded grid.
+use std::num::NonZeroU16;
+
+fn dimensions(rows: u16, cols: u16) -> (NonZeroU16, NonZeroU16) {
+    (
+        NonZeroU16::new(rows).unwrap_or(NonZeroU16::MIN),
+        NonZeroU16::new(cols).unwrap_or(NonZeroU16::MIN),
+    )
+}
+
+pub(super) fn screen_size(screen: &vt100::Screen) -> (u16, u16) {
+    let (rows, cols) = screen.size();
+    (rows.get(), cols.get())
+}
+
 pub struct Parser {
     inner: vt100::Parser,
     roles: Option<(vt100::Parser, vte::Parser, bool)>,
 }
 impl Parser {
     pub fn new(rows: u16, cols: u16, scrollback: usize) -> Self {
+        let (rows, cols) = dimensions(rows, cols);
         Self {
             inner: vt100::Parser::new(rows, cols, scrollback),
             roles: None,
         }
     }
     pub fn semantic(rows: u16, cols: u16, scrollback: usize) -> Self {
+        let (rows, cols) = dimensions(rows, cols);
         Self {
             inner: vt100::Parser::new(rows, cols, scrollback),
             roles: Some((
@@ -30,7 +46,7 @@ impl Parser {
             for byte in bytes {
                 mask.process(std::slice::from_ref(byte));
                 let mut roles = Roles(None);
-                decoder.advance(&mut roles, *byte);
+                decoder.advance(&mut roles, std::slice::from_ref(byte));
                 // vte dispatches OSC at the ESC of ST. Do not inject SGR
                 // until its following backslash has finished in both parsers.
                 if *pending && *byte != 0x1b {
@@ -54,15 +70,16 @@ impl Parser {
         self.roles.is_some()
     }
     pub fn set_size(&mut self, rows: u16, cols: u16) {
+        let (rows, cols) = dimensions(rows, cols);
         self.inner.set_size(rows, cols);
         if let Some((mask, _, _)) = &mut self.roles {
             mask.set_size(rows, cols);
         }
     }
     pub fn set_scrollback(&mut self, lines: usize) {
-        self.inner.set_scrollback(lines);
+        self.inner.screen_mut().set_scrollback(lines);
         if let Some((mask, _, _)) = &mut self.roles {
-            mask.set_scrollback(lines);
+            mask.screen_mut().set_scrollback(lines);
         }
     }
     pub fn accent(&self, row: u16, col: u16) -> bool {
@@ -178,7 +195,7 @@ mod tests {
         parser.process(b"\x1b[39m\x1b[2J\x1b[H");
         assert!(!parser.accent(0, 0));
         parser.set_size(5, 30);
-        assert_eq!(parser.screen().size(), (5, 30));
+        assert_eq!(screen_size(parser.screen()), (5, 30));
     }
     #[test]
     fn marker_inside_dcs_or_unknown_osc_is_not_interpreted() {

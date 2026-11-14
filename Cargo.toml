@@ -86,7 +86,8 @@ zbus = "5.19.0"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56.0"
-windows-core = "0.100"
+# The COM implementation macro must use the same windows-core as windows.
+windows-core = "0.62"
 windows = { version = "0.62", features = [
     "Foundation",
     "Media",

@@ -271,7 +271,7 @@ fn paste_bytes(text: &str, bracketed: bool) -> Option<Vec<u8>> {
 }
 
 fn selected_text(screen: &vt100::Screen, selection: Option<(usize, usize)>) -> String {
-    let (rows, cols) = screen.size();
+    let (rows, cols) = super::terminal_parser::screen_size(screen);
     let Some((anchor, end)) = selection else {
         return String::new();
     };
@@ -406,13 +406,13 @@ fn show_impl(
     let requested = if measure_viewport {
         dimensions(available, cell)
     } else {
-        parser.screen().size()
+        super::terminal_parser::screen_size(parser.screen())
     };
-    if !defer_resize && parser.screen().size() != requested {
+    if !defer_resize && super::terminal_parser::screen_size(parser.screen()) != requested {
         parser.set_size(requested.0, requested.1);
         state.clear_selection();
     }
-    let (rows, cols) = parser.screen().size();
+    let (rows, cols) = super::terminal_parser::screen_size(parser.screen());
     let (rect, _) = ui.allocate_exact_size(available, egui::Sense::hover());
     let response = ui
         .interact(rect, id, egui::Sense::click_and_drag())
