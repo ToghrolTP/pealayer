@@ -2062,17 +2062,17 @@ fn private_snapshot(state: &TerminalState, remote: bool) -> serde_json::Value {
     let sessions=state.views.iter().filter(permitted).map(|v|json!({"id":v.id,"target":v.target,"phase":v.phase,"rows":v.size.0,"cols":v.size.1})).collect::<Vec<_>>();
     let view = state.views.get(state.active).filter(|v| permitted(v));
     let screen=view.map(|v| {
-        let screen=v.parser.screen();let (rows,cols)=screen.size();
+        let screen=v.parser.screen();let (rows,cols)=super::terminal_parser::screen_size(screen);
         let lines=(0..rows).map(|row| {
             let mut runs:Vec<serde_json::Value>=Vec::new();
             for col in 0..cols {
                 let Some(cell)=screen.cell(row,col) else {continue;};
                 if cell.is_wide_continuation() {continue;}
-                let text=if cell.contents().is_empty(){" ".to_string()}else{cell.contents()};
+                let text=if cell.contents().is_empty(){" "}else{cell.contents()};
                 let fg=super::terminal_screen::web_color(cell.fgcolor());let bg=super::terminal_screen::web_color(cell.bgcolor());
                 let fg_role=if v.parser.accent(row,col){Some("accent")}else{None};
                 if let Some(last)=runs.last_mut() && last["fg"]==json!(fg) && last["fg_role"]==json!(fg_role) && last["bg"]==json!(bg) && last["bold"]==cell.bold() && last["inverse"]==cell.inverse() && last["underline"]==cell.underline() {
-                    let mut joined=last["text"].as_str().unwrap().to_string();joined.push_str(&text);last["text"]=json!(joined);
+                    let mut joined=last["text"].as_str().unwrap().to_string();joined.push_str(text);last["text"]=json!(joined);
                 } else {runs.push(json!({"text":text,"fg":fg,"fg_role":fg_role,"bg":bg,"bold":cell.bold(),"inverse":cell.inverse(),"underline":cell.underline()}));}
             } runs
         }).collect::<Vec<_>>();

@@ -931,7 +931,7 @@ mod tests {
     #[test]
     fn rich_help_multiline_prompt_and_settings_table_use_the_pinned_core() {
         let mut host = Host::new(30, 100).unwrap();
-        let mut parser = vt100::Parser::new(30, 100, 100);
+        let mut parser = vt100::Parser::new(30.try_into().unwrap(), 100.try_into().unwrap(), 100);
         parser.process(&host.take_output());
         assert!(parser.screen().contents().contains("╭─"));
         host.feed(b"help set\r");
@@ -1038,7 +1038,7 @@ mod tests {
     #[test]
     fn settings_use_friendly_labels_and_switch_to_distinct_stable_keys() {
         let mut host = Host::new(30, 110).unwrap();
-        let mut parser = vt100::Parser::new(30, 110, 0);
+        let mut parser = vt100::Parser::new(30.try_into().unwrap(), 110.try_into().unwrap(), 0);
         parser.process(&host.take_output());
         host.settings_pairs(&[("color_palette".into(), "studio".into())], true);
         host.tick(100);
@@ -1075,7 +1075,7 @@ mod tests {
             }
         }
         let mut host = Host::new(45, 160).unwrap();
-        let mut parser = vt100::Parser::new(45, 160, 0);
+        let mut parser = vt100::Parser::new(45.try_into().unwrap(), 160.try_into().unwrap(), 0);
         parser.process(&host.take_output());
         host.settings(&values, true).unwrap();
         for (index, entry) in firsts.iter().enumerate() {
@@ -1139,7 +1139,7 @@ mod tests {
     #[test]
     fn structured_status_is_one_aligned_block_and_does_not_duplicate_the_prompt() {
         let mut host = Host::new(30, 100).unwrap();
-        let mut parser = vt100::Parser::new(30, 100, 100);
+        let mut parser = vt100::Parser::new(30.try_into().unwrap(), 100.try_into().unwrap(), 100);
         parser.process(&host.take_output());
         host.feed(b"vol");
         host.status_report(&super::super::shell_status::Status {
@@ -1182,13 +1182,13 @@ mod tests {
     #[test]
     fn narrow_live_prompt_shows_update_without_duplicate_lines_or_losing_input() {
         let mut host = Host::new(21, 100).unwrap();
-        let mut parser = vt100::Parser::new(21, 100, 100);
+        let mut parser = vt100::Parser::new(21.try_into().unwrap(), 100.try_into().unwrap(), 100);
         host.branding("Pealayer Terminal Review");
         host.feed(b"sta");
         parser.process(&host.take_output());
         host.prepare_resize(63);
         parser.process(&host.take_output());
-        parser.set_size(21, 63);
+        parser.set_size(21.try_into().unwrap(), 63.try_into().unwrap());
         host.resize(21, 63);
         parser.process(&host.take_output());
         let summary = "■ Idle · ♪ 100% · ○ Hardware";
@@ -1251,7 +1251,7 @@ mod tests {
     #[test]
     fn multiline_status_keeps_lines_and_unfinished_prompt_separate() {
         let mut host = Host::new(24, 80).unwrap();
-        let mut parser = vt100::Parser::new(24, 80, 100);
+        let mut parser = vt100::Parser::new(24.try_into().unwrap(), 80.try_into().unwrap(), 100);
         parser.process(&host.take_output());
         host.feed(b"vol");
         host.response("Playback: idle\nPosition: 0.000 s\nVolume: 100%", false);
