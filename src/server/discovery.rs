@@ -15,12 +15,18 @@ use std::{
 const PEALAYER_TYPE: &str = "urn:digitalogic-ir:device:Pealayer:1";
 const PC_TYPE: &str = "urn:pccontroller-org:service:Controller:1";
 const MOBILE_TYPE: &str = "urn:digitalogic-ir:device:ControllerMobile:1";
+const PEER_SERVICE: &str = "_lan-peer._tcp.local.";
+const PEER_CLASS: &str = "lan-peer";
+const SSDP_GROUP: Ipv4Addr = Ipv4Addr::new(239, 255, 255, 250);
+const SSDP_PORT: u16 = 1900;
+const SSDP_SEARCH: &[u8] = b"M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 1\r\nST: ssdp:all\r\n\r\n";
 #[derive(Default)]
 struct Registry {
     peers: BTreeMap<String, (Instant, Value)>,
-    attempted: BTreeMap<String, Instant>,
+    attempted: BTreeMap<(SocketAddr, &'static str), Instant>,
     errors: BTreeMap<String, String>,
     active: BTreeSet<String>,
+    advertising: BTreeSet<String>,
     own: BTreeSet<SocketAddr>,
 }
 static REGISTRY: OnceLock<Mutex<Registry>> = OnceLock::new();
@@ -32,6 +38,16 @@ fn fault(protocol: &str, error: impl std::fmt::Display) {
     if let Ok(mut r) = registry().lock() {
         r.active.remove(protocol);
         r.errors.insert(protocol.into(), error.to_string());
+        if protocol == "mdns" {
+            r.active.remove("dns-sd");
+            r.advertising.remove("dns-sd");
+        }
+    }
+}
+fn active(protocol: &str) {
+    if let Ok(mut r) = registry().lock() {
+        r.errors.remove(protocol);
+        r.active.insert(protocol.into());
     }
 }
 pub fn snapshot() -> Value {
@@ -41,7 +57,8 @@ pub fn snapshot() -> Value {
     r.peers
         .retain(|_, (at, _)| at.elapsed() < Duration::from_secs(120));
     json!({"peers":r.peers.values().map(|(_,v)|v).collect::<Vec<_>>(),"errors":r.errors,
-        "configured_protocols":["dns-sd","mdns","ssdp","mndp"],"active_protocols":r.active,"automatic_authority":false})
+        "configured_protocols":["dns-sd","mdns","ssdp","mndp"],"active_protocols":r.active,
+        "advertising_protocols":r.advertising,"automatic_authority":false})
 }
 pub(crate) fn rpc_payload(payload: &str) -> Option<String> {
     let value: Value = serde_json::from_str(payload).ok()?;
@@ -66,6 +83,7 @@ struct Candidate {
     name: String,
     product: String,
     protocol: &'static str,
+    generic: bool,
 }
 fn local_source(address: SocketAddr) -> bool {
     matches!(address.ip(), IpAddr::V4(ip) if (ip.is_private() || ip.is_link_local()) && !ip.is_loopback() && !ip.is_broadcast() && address.port()!=0)
@@ -73,26 +91,47 @@ fn local_source(address: SocketAddr) -> bool {
 fn product_ok(value: &str) -> bool {
     matches!(value, "pccontroller" | "pealayer" | "controller-mobile")
 }
+fn peer_product(value: &str) -> bool {
+    (1..=48).contains(&value.len())
+        && value.as_bytes()[0].is_ascii_lowercase()
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+impl Registry {
+    fn admit(&mut self, candidate: &Candidate, now: Instant) -> bool {
+        let key = (candidate.address, candidate.protocol);
+        self.attempted
+            .retain(|_, at| now.duration_since(*at) < Duration::from_secs(30));
+        if self.own.contains(&candidate.address)
+            || self.attempted.contains_key(&key)
+            || self.attempted.len() >= 128
+        {
+            return false;
+        }
+        self.attempted.insert(key, now);
+        true
+    }
+}
 fn offer(queue: &mpsc::SyncSender<Candidate>, candidate: Candidate) {
     if !local_source(candidate.address)
-        || !product_ok(&candidate.product)
+        || !(if candidate.generic {
+            candidate.product.is_empty() || peer_product(&candidate.product)
+        } else {
+            product_ok(&candidate.product)
+        })
         || candidate.name.len() > 96
     {
         return;
     }
-    let key = candidate.address.to_string();
     if let Ok(mut r) = registry().lock() {
-        if r.own.contains(&candidate.address) {
-            return;
+        if r.admit(&candidate, Instant::now()) {
+            let key = (candidate.address, candidate.protocol);
+            if queue.try_send(candidate).is_err() {
+                r.attempted.remove(&key);
+            }
         }
-        r.attempted
-            .retain(|_, at| at.elapsed() < Duration::from_secs(30));
-        if r.attempted.contains_key(&key) || r.attempted.len() >= 128 {
-            return;
-        }
-        r.attempted.insert(key, Instant::now());
     }
-    let _ = queue.try_send(candidate);
 }
 fn verify(candidate: Candidate) {
     let Ok(client) = reqwest::blocking::Client::builder()
@@ -150,12 +189,9 @@ fn verify(candidate: Candidate) {
         }
         health = json!({"product":"pccontroller","status":"ok"});
     }
-    if health["status"] != "ok"
-        || health["product"].as_str().or(health["service"].as_str())
-            != Some(candidate.product.as_str())
-    {
+    let Some(product) = verified_product(&candidate, &health) else {
         return;
-    }
+    };
     if let Ok(mut r) = registry().lock() {
         r.peers
             .retain(|_, (at, _)| at.elapsed() < Duration::from_secs(120));
@@ -164,47 +200,74 @@ fn verify(candidate: Candidate) {
             let mut protocols = r
                 .peers
                 .get(&key)
+                .filter(|(_, v)| v["product"] == product)
                 .and_then(|(_, v)| v["protocols"].as_array())
                 .cloned()
                 .unwrap_or_default();
             if !protocols.contains(&json!(candidate.protocol)) {
                 protocols.push(json!(candidate.protocol));
             }
-            r.peers.insert(key,(Instant::now(),json!({"name":candidate.name,"product":candidate.product,
+            r.peers.insert(key,(Instant::now(),json!({"name":candidate.name,"product":product,
                 "endpoint":format!("http://{}",candidate.address),"verified":true,"protocols":protocols})));
         }
     }
 }
 
-/// Advertise only sockets that really bound to LAN addresses. Loopback-only
-/// development/fixtures never open multicast sockets or discovery daemons.
+fn verified_product<'a>(candidate: &Candidate, health: &'a Value) -> Option<&'a str> {
+    let product = if candidate.generic {
+        let product = health["product_id"]
+            .as_str()
+            .or(health["product"].as_str())?;
+        if health["discovery"] != PEER_CLASS || !peer_product(product) {
+            return None;
+        }
+        product
+    } else {
+        health["product"].as_str().or(health["service"].as_str())?
+    };
+    (health["status"] == "ok" && (candidate.product.is_empty() || candidate.product == product))
+        .then_some(product)
+}
+
+/// Browse even with a loopback-only Web listener. Advertising a Pealayer
+/// endpoint still requires an actual LAN listener on that address.
 pub fn start(listeners: &[std::net::TcpListener], identity: &str) {
+    if listeners.is_empty() {
+        return;
+    }
     let bound: Vec<_> = listeners
         .iter()
         .filter_map(|s| s.local_addr().ok())
         .filter(|a| a.is_ipv4() && !a.ip().is_loopback())
         .collect();
-    if bound.is_empty() {
-        return;
-    }
     let addresses: Vec<Ipv4Addr> = crate::network::discover_bind_targets()
         .into_iter()
         .filter_map(|a| a.value.parse::<Ipv4Addr>().ok())
-        .filter(|ip| {
-            !ip.is_unspecified()
-                && !ip.is_loopback()
-                && bound
-                    .iter()
-                    .any(|b| b.ip().is_unspecified() || b.ip() == IpAddr::V4(*ip))
-        })
+        .filter(|ip| ip.is_private() || ip.is_link_local())
         .collect();
     if addresses.is_empty() {
         return;
     }
-    let port = bound[0].port();
-    if let Ok(mut r) = registry().lock() {
+    let advertised = bound
+        .first()
+        .map(|listener| {
+            let port = listener.port();
+            let advertised: Vec<_> = addresses
+                .iter()
+                .copied()
+                .filter(|ip| {
+                    bound.iter().any(|socket| {
+                        socket.port() == port
+                            && (socket.ip().is_unspecified() || socket.ip() == IpAddr::V4(*ip))
+                    })
+                })
+                .collect();
+            (port, advertised)
+        })
+        .filter(|(_, addresses)| !addresses.is_empty());
+    if let (Some((port, advertised)), Ok(mut r)) = (&advertised, registry().lock()) {
         r.own
-            .extend(addresses.iter().map(|ip| SocketAddr::from((*ip, port))));
+            .extend(advertised.iter().map(|ip| SocketAddr::from((*ip, *port))));
     }
     let mut name = String::new();
     for c in identity.chars().filter(|c| !c.is_control()) {
@@ -237,56 +300,54 @@ pub fn start(listeners: &[std::net::TcpListener], identity: &str) {
             }
         });
     }
-    start_mdns(&addresses, port, &name, &id, tx.clone());
-    start_udp(
-        addresses.clone(),
-        port,
-        name.clone(),
-        id.clone(),
-        false,
-        tx.clone(),
-    );
-    start_udp(addresses, port, name, id, true, tx);
+    start_mdns(advertised.as_ref(), &name, &id, tx.clone());
+    start_ssdp_search(&addresses, tx.clone());
+    if let Some((port, advertised)) = advertised {
+        start_ssdp_responder(&advertised, port, name.clone(), id.clone());
+        start_mndp(advertised, port, name, id, tx);
+    }
 }
 fn start_mdns(
-    addresses: &[Ipv4Addr],
-    port: u16,
+    advertised: Option<&(u16, Vec<Ipv4Addr>)>,
     name: &str,
     id: &str,
     queue: mpsc::SyncSender<Candidate>,
 ) {
     let result = (|| -> Result<(), String> {
         let daemon = ServiceDaemon::new().map_err(|e| e.to_string())?;
-        // Explicit addresses: never advertise a loopback/non-listening NIC.
-        let service = ServiceInfo::new(
-            "_pealayer._tcp.local.",
-            name,
-            &format!("pealayer-{}.local.", &id[..12]),
-            addresses
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(","),
-            port,
-            [
-                ("product", "pealayer"),
-                ("path", "/api/ipc"),
-                ("health", "/healthz"),
-                ("instance", id),
-            ]
-            .as_slice(),
-        )
-        .map_err(|e| e.to_string())?;
-        daemon.register(service).map_err(|e| e.to_string())?;
         let monitor = daemon.monitor().map_err(|e| e.to_string())?;
+        if let Some((port, addresses)) = advertised {
+            // Explicit addresses: never advertise a loopback/non-listening NIC.
+            for kind in ["_pealayer._tcp.local.", PEER_SERVICE] {
+                let service = ServiceInfo::new(
+                    kind,
+                    name,
+                    &format!("pealayer-{}.local.", &id[..12]),
+                    addresses
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(","),
+                    *port,
+                    [
+                        ("product", "pealayer"),
+                        ("path", "/api/ipc"),
+                        ("health", "/healthz"),
+                        ("instance", id),
+                    ]
+                    .as_slice(),
+                )
+                .map_err(|e| e.to_string())?;
+                daemon.register(service).map_err(|e| e.to_string())?;
+            }
+        }
         thread::spawn(move || {
             while let Ok(event) = monitor.recv() {
                 if let DaemonEvent::Error(error) = event {
                     fault("mdns", error);
                 } else if matches!(event, DaemonEvent::Announce(..)) {
                     if let Ok(mut r) = registry().lock() {
-                        r.active.insert("mdns".into());
-                        r.active.insert("dns-sd".into());
+                        r.advertising.insert("dns-sd".into());
                     }
                 }
             }
@@ -295,12 +356,29 @@ fn start_mdns(
             ("_pccontroller._tcp.local.", "pccontroller"),
             ("_pealayer._tcp.local.", "pealayer"),
             ("_digitalogic._tcp.local.", "controller-mobile"),
+            (PEER_SERVICE, ""),
         ] {
             let receiver = daemon.browse(kind).map_err(|e| e.to_string())?;
             let queue = queue.clone();
             thread::spawn(move || {
                 while let Ok(event) = receiver.recv() {
+                    if matches!(event, ServiceEvent::SearchStarted(_)) {
+                        active("mdns");
+                        active("dns-sd");
+                    }
                     if let ServiceEvent::ServiceResolved(service) = event {
+                        let generic = kind == PEER_SERVICE;
+                        let product = if generic {
+                            let Some(product) = service
+                                .get_property_val_str("product")
+                                .filter(|p| peer_product(p))
+                            else {
+                                continue;
+                            };
+                            product
+                        } else {
+                            product
+                        };
                         for address in service.get_addresses_v4() {
                             offer(
                                 &queue,
@@ -316,6 +394,7 @@ fn start_mdns(
                                         .collect(),
                                     product: product.into(),
                                     protocol: "dns-sd",
+                                    generic,
                                 },
                             );
                         }
@@ -343,28 +422,178 @@ fn udp_socket(port: u16, group: Ipv4Addr, addresses: &[Ipv4Addr]) -> std::io::Re
     socket.set_reuse_address(true)?;
     socket.bind(&SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)).into())?;
     let socket: UdpSocket = socket.into();
+    let mut joined = false;
+    let mut last_error = None;
     for ip in addresses {
-        socket.join_multicast_v4(&group, ip)?;
+        match socket.join_multicast_v4(&group, ip) {
+            Ok(()) => joined = true,
+            Err(error) => {
+                log::warn!("Discovery multicast join on {ip}: {error}");
+                last_error = Some(error);
+            }
+        }
+    }
+    if !joined && let Some(error) = last_error {
+        return Err(error);
     }
     socket.set_broadcast(true)?;
     socket.set_read_timeout(Some(Duration::from_millis(250)))?;
     Ok(socket)
 }
-fn start_udp(
+
+fn idle_udp_error(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::WouldBlock
+            | std::io::ErrorKind::TimedOut
+            | std::io::ErrorKind::ConnectionReset
+    )
+}
+
+fn ssdp_search_socket(ip: Ipv4Addr) -> std::io::Result<UdpSocket> {
+    let socket = UdpSocket::bind((ip, 0))?;
+    socket2::SockRef::from(&socket).set_multicast_if_v4(&ip)?;
+    socket.set_read_timeout(Some(Duration::from_secs(1)))?;
+    Ok(socket)
+}
+
+fn start_ssdp_search(addresses: &[Ipv4Addr], queue: mpsc::SyncSender<Candidate>) {
+    let mut last_error = None;
+    let mut started = false;
+    for &ip in addresses {
+        let socket = match ssdp_search_socket(ip) {
+            Ok(socket) => socket,
+            Err(error) => {
+                log::warn!("SSDP search socket on {ip}: {error}");
+                last_error = Some(error);
+                continue;
+            }
+        };
+        started = true;
+        let queue = queue.clone();
+        thread::spawn(move || {
+            let mut last = Instant::now() - Duration::from_secs(30);
+            let mut bytes = [0u8; 4096];
+            loop {
+                if last.elapsed() >= Duration::from_secs(30) {
+                    match socket.send_to(SSDP_SEARCH, (SSDP_GROUP, SSDP_PORT)) {
+                        Ok(_) => active("ssdp"),
+                        Err(error) => log::warn!("SSDP search on {ip}: {error}"),
+                    }
+                    last = Instant::now();
+                }
+                match socket.recv_from(&mut bytes) {
+                    Ok((len, source)) if last.elapsed() <= Duration::from_secs(3) => {
+                        if let Some(candidate) = parse_ssdp(&bytes[..len], source) {
+                            offer(&queue, candidate);
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(error) if idle_udp_error(&error) => {}
+                    Err(error) => {
+                        log::warn!("SSDP search receive on {ip}: {error}");
+                        return;
+                    }
+                }
+            }
+        });
+    }
+    if !started && let Some(error) = last_error {
+        fault("ssdp", error);
+    }
+}
+
+fn is_ssdp_search(request: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(request) else {
+        return false;
+    };
+    let mut lines = text.lines();
+    if lines.next() != Some("M-SEARCH * HTTP/1.1") {
+        return false;
+    }
+    let (mut discover, mut target) = (false, false);
+    for (name, value) in lines.map_while(|line| line.split_once(':')) {
+        if name.eq_ignore_ascii_case("man") {
+            discover = value.trim().eq_ignore_ascii_case("\"ssdp:discover\"");
+        } else if name.eq_ignore_ascii_case("st") {
+            let value = value.trim();
+            target = value.eq_ignore_ascii_case("ssdp:all") || value == PEALAYER_TYPE;
+        }
+    }
+    discover && target
+}
+
+fn ssdp_reply_socket(source: SocketAddr, advertised: &[Ipv4Addr]) -> Option<(UdpSocket, Ipv4Addr)> {
+    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+    socket.connect(source).ok()?;
+    let IpAddr::V4(ip) = socket.local_addr().ok()?.ip() else {
+        return None;
+    };
+    advertised.contains(&ip).then_some((socket, ip))
+}
+
+fn start_ssdp_responder(advertised: &[Ipv4Addr], port: u16, name: String, id: String) {
+    let socket = match udp_socket(SSDP_PORT, SSDP_GROUP, advertised) {
+        Ok(socket) => socket,
+        Err(error) => {
+            fault("ssdp-advertising", error);
+            return;
+        }
+    };
+    if let Ok(mut r) = registry().lock() {
+        r.advertising.insert("ssdp".into());
+    }
+    let advertised = advertised.to_vec();
+    thread::spawn(move || {
+        let mut replies = BTreeMap::new();
+        let mut bytes = [0u8; 4096];
+        loop {
+            let (len, source) = match socket.recv_from(&mut bytes) {
+                Ok(packet) => packet,
+                Err(error) if idle_udp_error(&error) => continue,
+                Err(error) => {
+                    fault("ssdp-advertising", error);
+                    if let Ok(mut r) = registry().lock() {
+                        r.advertising.remove("ssdp");
+                    }
+                    return;
+                }
+            };
+            if !local_source(source) || !is_ssdp_search(&bytes[..len]) {
+                continue;
+            }
+            replies.retain(|_, at: &mut Instant| at.elapsed() < Duration::from_secs(1));
+            if replies.len() >= 128
+                || replies.contains_key(&source)
+                || replies
+                    .keys()
+                    .filter(|key: &&SocketAddr| key.ip() == source.ip())
+                    .count()
+                    >= 4
+            {
+                continue;
+            }
+            if let Some((reply, ip)) = ssdp_reply_socket(source, &advertised) {
+                replies.insert(source, Instant::now());
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nCACHE-CONTROL: max-age=60\r\nEXT:\r\nST: {PEALAYER_TYPE}\r\nUSN: uuid:{id}::{PEALAYER_TYPE}\r\nLOCATION: http://{ip}:{port}/api/discovery\r\nX-Digitalogic-Discovery: {PEER_CLASS}\r\nX-Digitalogic-Product: pealayer\r\nX-Digitalogic-Name: {name}\r\n\r\n"
+                );
+                let _ = reply.send(response.as_bytes());
+            }
+        }
+    });
+}
+
+fn start_mndp(
     addresses: Vec<Ipv4Addr>,
     port: u16,
     name: String,
     id: String,
-    mndp: bool,
     queue: mpsc::SyncSender<Candidate>,
 ) {
-    let group = if mndp {
-        Ipv4Addr::new(224, 0, 0, 88)
-    } else {
-        Ipv4Addr::new(239, 255, 255, 250)
-    };
-    let udp_port = if mndp { 5678 } else { 1900 };
-    let protocol = if mndp { "mndp" } else { "ssdp" };
+    let group = Ipv4Addr::new(224, 0, 0, 88);
+    let udp_port = 5678;
+    let protocol = "mndp";
     let socket = match udp_socket(udp_port, group, &addresses) {
         Ok(s) => s,
         Err(e) => {
@@ -374,6 +603,7 @@ fn start_udp(
     };
     if let Ok(mut r) = registry().lock() {
         r.active.insert(protocol.into());
+        r.advertising.insert(protocol.into());
     }
     thread::spawn(move || {
         let mut bytes = [0u8; 4096];
@@ -382,30 +612,17 @@ fn start_udp(
         let mut replies: BTreeMap<IpAddr, Instant> = BTreeMap::new();
         loop {
             if last.elapsed() >= Duration::from_secs(30) {
-                let probe = if mndp {
-                    vec![0, 0, 0, 0]
-                } else {
-                    b"M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 1\r\nST: ssdp:all\r\n\r\n".to_vec()
-                };
+                let probe = [0; 4];
                 let _ = socket.send_to(&probe, (group, udp_port));
-                if mndp {
-                    let _ = socket.send_to(&probe, (Ipv4Addr::BROADCAST, udp_port));
-                    let packet = encode_mndp(&name, &id, port, sequence);
-                    sequence = sequence.wrapping_add(1);
-                    let _ = socket.send_to(&packet, (Ipv4Addr::BROADCAST, udp_port));
-                }
+                let _ = socket.send_to(&probe, (Ipv4Addr::BROADCAST, udp_port));
+                let packet = encode_mndp(&name, &id, port, sequence);
+                sequence = sequence.wrapping_add(1);
+                let _ = socket.send_to(&packet, (Ipv4Addr::BROADCAST, udp_port));
                 last = Instant::now();
             }
             let (length, source) = match socket.recv_from(&mut bytes) {
                 Ok(v) => v,
-                Err(e)
-                    if matches!(
-                        e.kind(),
-                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                    ) =>
-                {
-                    continue;
-                }
+                Err(e) if idle_udp_error(&e) => continue,
                 Err(e) => {
                     fault(protocol, e);
                     return;
@@ -415,43 +632,15 @@ fn start_udp(
                 continue;
             }
             let request = &bytes[..length];
-            let discovery = if mndp {
-                request == [0, 0, 0, 0]
-            } else {
-                std::str::from_utf8(request).is_ok_and(|s| {
-                    s.starts_with("M-SEARCH * HTTP/1.1\r\n")
-                        && s.to_ascii_lowercase().contains("man: \"ssdp:discover\"")
-                        && (s.to_ascii_lowercase().contains("st: ssdp:all")
-                            || s.contains(PEALAYER_TYPE))
-                })
-            };
-            if discovery {
+            if request == [0; 4] {
                 replies.retain(|_, at| at.elapsed() < Duration::from_secs(1));
                 if replies.contains_key(&source.ip()) || replies.len() >= 128 {
                     continue;
                 }
                 replies.insert(source.ip(), Instant::now());
-                let response = if mndp {
-                    encode_mndp(&name, &id, port, sequence)
-                } else {
-                    let ip = addresses
-                        .iter()
-                        .find(|ip| {
-                            ip.octets()[..3]
-                                == match source.ip() {
-                                    IpAddr::V4(v) => v.octets()[..3].to_vec(),
-                                    _ => vec![],
-                                }
-                        })
-                        .unwrap_or(&addresses[0]);
-                    format!("HTTP/1.1 200 OK\r\nCACHE-CONTROL: max-age=60\r\nEXT:\r\nST: {PEALAYER_TYPE}\r\nUSN: uuid:{id}::{PEALAYER_TYPE}\r\nLOCATION: http://{ip}:{port}/api/discovery\r\nX-Digitalogic-Product: pealayer\r\nX-Digitalogic-Name: {name}\r\n\r\n").into_bytes()
-                };
+                let response = encode_mndp(&name, &id, port, sequence);
                 let _ = socket.send_to(&response, source);
-            } else if let Some(candidate) = if mndp {
-                parse_mndp(request, source)
-            } else {
-                parse_ssdp(request, source)
-            } {
+            } else if let Some(candidate) = parse_mndp(request, source) {
                 offer(&queue, candidate);
             }
         }
@@ -512,6 +701,7 @@ fn parse_mndp(packet: &[u8], source: SocketAddr) -> Option<Candidate> {
         name,
         product,
         protocol: "mndp",
+        generic: false,
     })
 }
 fn parse_ssdp(packet: &[u8], source: SocketAddr) -> Option<Candidate> {
@@ -531,11 +721,25 @@ fn parse_ssdp(packet: &[u8], source: SocketAddr) -> Option<Candidate> {
             }
         }
     }
-    let product = match *headers.get("st")? {
-        PC_TYPE => "pccontroller",
-        PEALAYER_TYPE => "pealayer",
-        MOBILE_TYPE => "controller-mobile",
-        _ => return None,
+    let target = *headers.get("st")?;
+    let generic = headers.get("x-digitalogic-discovery") == Some(&PEER_CLASS)
+        || matches!(
+            target,
+            "urn:schemas-upnp-org:device:Basic:1" | "upnp:rootdevice"
+        );
+    let product = if generic {
+        match headers.get("x-digitalogic-product").copied() {
+            Some(value) if peer_product(value) => value,
+            Some(_) => return None,
+            None => "",
+        }
+    } else {
+        match target {
+            PC_TYPE => "pccontroller",
+            PEALAYER_TYPE => "pealayer",
+            MOBILE_TYPE => "controller-mobile",
+            _ => return None,
+        }
     };
     let url = url::Url::parse(headers.get("location")?).ok()?;
     if url.scheme() != "http"
@@ -557,5 +761,91 @@ fn parse_ssdp(packet: &[u8], source: SocketAddr) -> Option<Candidate> {
             .collect(),
         product: product.into(),
         protocol: "ssdp",
+        generic,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generic_ssdp_uses_verified_product_instead_of_a_product_list() {
+        let wire = b"HTTP/1.1 200 OK\r\nST: upnp:rootdevice\r\nLOCATION: http://192.168.1.20/description.xml\r\n\r\n";
+        let source = ([192, 168, 1, 20], 1900).into();
+        let mut candidate = parse_ssdp(wire, source).unwrap();
+        let health = json!({"status":"ok","discovery":"lan-peer","product":"fixture-device"});
+        assert!(candidate.generic);
+        assert_eq!(
+            verified_product(&candidate, &health),
+            Some("fixture-device")
+        );
+        assert_eq!(
+            verified_product(
+                &candidate,
+                &json!({"status":"ok","product":"fixture-device"})
+            ),
+            None
+        );
+        candidate.product = "different-device".into();
+        assert_eq!(verified_product(&candidate, &health), None);
+        assert!(parse_ssdp(wire, ([192, 168, 1, 21], 1900).into()).is_none());
+    }
+
+    #[test]
+    fn endpoint_can_be_verified_over_both_protocols_in_either_order() {
+        for protocols in [["ssdp", "dns-sd"], ["dns-sd", "ssdp"]] {
+            let mut registry = Registry::default();
+            let now = Instant::now();
+            let mut candidate = Candidate {
+                address: ([192, 168, 1, 20], 8080).into(),
+                name: "Pealayer".into(),
+                product: "pealayer".into(),
+                protocol: protocols[0],
+                generic: false,
+            };
+            assert!(registry.admit(&candidate, now));
+            assert!(!registry.admit(&candidate, now));
+            candidate.protocol = protocols[1];
+            assert!(registry.admit(&candidate, now));
+            registry.own.insert(candidate.address);
+            assert!(!registry.admit(&candidate, now + Duration::from_secs(31)));
+        }
+    }
+
+    #[test]
+    fn ssdp_search_validates_exact_target_and_discovery_headers() {
+        assert!(is_ssdp_search(SSDP_SEARCH));
+        let targeted =
+            format!("M-SEARCH * HTTP/1.1\r\nMan: \"ssdp:discover\"\r\nSt: {PEALAYER_TYPE}\r\n\r\n");
+        assert!(is_ssdp_search(targeted.as_bytes()));
+        assert!(!is_ssdp_search(targeted.replace("St:", "X-ST:").as_bytes()));
+        assert!(!is_ssdp_search(
+            targeted
+                .replace("\"ssdp:discover\"", "\"anything\"")
+                .as_bytes()
+        ));
+    }
+
+    #[test]
+    fn ssdp_responses_use_an_advertised_route_address() {
+        let receiver = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let destination = receiver.local_addr().unwrap();
+        assert!(ssdp_reply_socket(destination, &[Ipv4Addr::new(192, 168, 1, 2)]).is_none());
+        let (reply, ip) = ssdp_reply_socket(destination, &[Ipv4Addr::LOCALHOST]).unwrap();
+        let message = format!(
+            "HTTP/1.1 200 OK\r\nST: {PEALAYER_TYPE}\r\nLOCATION: http://{ip}:8080/api/discovery\r\n\r\n"
+        );
+        reply.send(message.as_bytes()).unwrap();
+        receiver
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let mut packet = [0; 256];
+        let (len, source) = receiver.recv_from(&mut packet).unwrap();
+        assert_eq!(
+            parse_ssdp(&packet[..len], source).unwrap().address,
+            ([127, 0, 0, 1], 8080).into()
+        );
+        assert!(parse_ssdp(&packet[..len], ([192, 168, 1, 2], source.port()).into()).is_none());
+    }
 }
