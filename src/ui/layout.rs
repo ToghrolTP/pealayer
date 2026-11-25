@@ -9488,6 +9488,113 @@ mod timeline_row_tests {
     }
 
     #[test]
+    fn timeline_context_menu_fit_to_window_persists_reset_scroll_offset() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+        app.language = crate::config::AppLanguage::English;
+        app.duration = 3600.0;
+        app.timeline_zoom = 100.0;
+        app.timeline_animated_navigation = false;
+        app.is_paused = true;
+        app.timeline_follow_playhead = false;
+        app.timeline
+            .analog_tracks
+            .push(crate::four_d::curve::AnalogTrack::new("PWM", 12));
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|style| style.animation_time = 0.0);
+        let time = std::cell::Cell::new(0.0);
+        let render = |app: &mut PealayerApp, events| {
+            time.set(time.get() + 0.02);
+            let mut output = ctx.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 420.0))),
+                time: Some(time.get()), events, ..Default::default()
+            }, |ui| { PealayerTabViewer::new(app).ui(ui, &mut PealayerTab::Timeline); });
+            output.textures_delta.clear();
+            output
+        };
+        render(&mut app, vec![]);
+        let ruler = ctx.read_response(egui::Id::new("timeline_ruler")).unwrap().rect;
+        let canvas = ctx.read_response(timeline_keyboard_focus_id()).unwrap().rect;
+        let canvas_point = egui::pos2(ruler.left() + 80.0, (ruler.bottom() + 10.0).min(canvas.bottom() - 4.0));
+        assert!(canvas_point.y > ruler.bottom() && canvas.contains(canvas_point), "canvas={canvas:?}, ruler={ruler:?}");
+        render(&mut app, vec![
+            egui::Event::PointerMoved(canvas_point),
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(-500.0, 0.0),
+                modifiers: egui::Modifiers::NONE,
+                phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Wheel,
+            },
+        ]);
+        render(&mut app, vec![]);
+        assert!(app.project.scroll[0] > 100.0, "timeline fixture must be scrolled before fit");
+
+        render(&mut app, vec![
+            egui::Event::PointerMoved(canvas_point),
+            egui::Event::PointerButton {
+                pos: canvas_point,
+                button: egui::PointerButton::Secondary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        let menu_output = render(&mut app, vec![egui::Event::PointerButton {
+            pos: canvas_point,
+            button: egui::PointerButton::Secondary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        let menu_output = if menu_output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::epaint::Shape::Text(text) if text.galley.job.text.contains("Fit to window (Shift+Z)"))
+        }) {
+            menu_output
+        } else {
+            render(&mut app, vec![])
+        };
+        let rendered_texts: Vec<String> = menu_output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) => Some(text.galley.job.text.clone()),
+                _ => None,
+            })
+            .collect();
+        let fit_center = menu_output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text)
+                    if text.galley.job.text.contains("Fit to window (Shift+Z)") =>
+                {
+                    Some(egui::Rect::from_min_size(text.pos, text.galley.size()).center())
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!(
+                "timeline context menu must render Fit to window button; popup_open={}, canvas={:?}, texts={rendered_texts:?}",
+                egui::Popup::is_any_open(&ctx),
+                ctx.read_response(timeline_keyboard_focus_id()).map(|r| (r.rect, r.hovered(), r.secondary_clicked())),
+            ));
+        for pressed in [true, false] {
+            render(&mut app, vec![
+                egui::Event::PointerMoved(fit_center),
+                egui::Event::PointerButton {
+                    pos: fit_center,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]);
+        }
+        assert_eq!(app.timeline_zoom, TIMELINE_MIN_ZOOM);
+        assert_eq!(app.project.scroll[0], 0.0, "Fit to window must immediately reset stored horizontal scroll");
+        render(&mut app, vec![]);
+        assert_eq!(app.project.scroll[0], 0.0, "Fit to window scroll reset must persist across frames");
+    }
+
+    #[test]
     fn timeline_ruler_capture_requires_a_visible_start_and_survives_toolbar_crossing() {
         let ctx = egui::Context::default();
         let viewport = egui::Rect::from_min_max(egui::pos2(250.0, 0.0), egui::pos2(900.0, 180.0));
@@ -20136,7 +20243,13 @@ impl<'a> PealayerTabViewer<'a> {
                                         &mut timeline_scroll_state,
                                         navigation_transition_id,
                                     );
-                                    timeline_scroll_changed = true;
+                                    if !self.app.timeline_animated_navigation {
+                                        timeline_scroll_state.store(ui.ctx(), timeline_scroll_id);
+                                        self.app.project.scroll = [
+                                            timeline_scroll_state.offset().x,
+                                            timeline_scroll_state.offset().y,
+                                        ];
+                                    }
                                     ui.close();
                                 }
                                 ui.separator();
@@ -20393,7 +20506,6 @@ impl<'a> PealayerTabViewer<'a> {
                                         &mut timeline_scroll_state,
                                         navigation_transition_id,
                                     );
-                                    timeline_scroll_changed = true;
                                 } else if playhead_left_pressed || playhead_right_pressed {
                                     let direction = if playhead_left_pressed { -1.0 } else { 1.0 };
                                     let step_seconds = timeline_frame_step_ms(

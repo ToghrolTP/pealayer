@@ -593,7 +593,7 @@ mod tests {
                     ctx.all_styles_mut(|style| style.text_styles.get_mut(&egui::TextStyle::Button).unwrap().size = 26.0);
                 }
                 let owner=std::cell::Cell::new(egui::Id::NULL);
-                let mut render=|app:&mut PealayerApp,events| {
+                let render=|app:&mut PealayerApp,events| {
                     let mut output=ctx.run_ui(egui::RawInput {
                         screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(width,600.0))),events,..Default::default()
                     },|ui| {

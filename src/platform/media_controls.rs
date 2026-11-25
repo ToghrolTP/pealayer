@@ -2,7 +2,10 @@
 //! Never register a second set of global media-key shortcuts.
 use crate::platform::interop::InteropCommand;
 use souvlaki::{MediaControlEvent, MediaControls, MediaPlayback, MediaPosition, SeekDirection};
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(
+    target_os = "windows",
+    all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android")))
+)))]
 use souvlaki::{MediaMetadata, PlatformConfig};
 use std::sync::{
     Arc,
@@ -311,6 +314,8 @@ impl MediaControlsManager {
             #[cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))]
             position_observed: Instant::now(),
         };
+        #[cfg(not(target_os = "windows"))]
+        let _ = hwnd_raw;
         #[cfg(target_os = "windows")]
         {
             if hwnd_raw == 0 {
@@ -334,7 +339,6 @@ impl MediaControlsManager {
         { manager.mpris = Some(super::mpris_session::MprisSession::new(app_name, manager.active.clone(), event_tx, egui_ctx)); }
         #[cfg(not(any(target_os = "windows", all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))))]
         {
-            let _ = hwnd_raw;
             let config = PlatformConfig {
                 dbus_name: "pealayer",
                 display_name: app_name,

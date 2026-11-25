@@ -1,5 +1,4 @@
 //! Optional application command surface. Visibility never owns workspace panels.
-use crate::ui::palette::native::controls::CheckboxUiExt;
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 
@@ -275,7 +274,11 @@ pub fn owns_keyboard(ctx: &egui::Context) -> bool {
 #[cfg(feature = "workspace-toolbar")]
 mod native {
     use super::*;
-    use crate::{app::PealayerApp, platform::interop::InteropCommand};
+    use crate::{
+        app::PealayerApp,
+        platform::interop::InteropCommand,
+        ui::palette::native::controls::CheckboxUiExt,
+    };
 
     #[derive(Clone)]
     struct WorkspaceToolbarDrag {

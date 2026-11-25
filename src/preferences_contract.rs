@@ -406,6 +406,7 @@ fn designer_color_control(key: &'static str, label: &'static str) -> PreferenceC
 /// Optional surfaces advertise only controls their compiled host can use.
 /// Their serialized values remain in the config even when the feature is omitted.
 fn workspace_tool_controls(config: &crate::config::AppConfig) -> Vec<PreferenceControl> {
+    #[cfg_attr(not(any(feature = "workspace-toolbar", feature = "workspace-terminal")), allow(unused_mut))]
     let mut controls = Vec::new();
     #[cfg(feature = "workspace-toolbar")]
     {

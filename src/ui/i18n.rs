@@ -1531,7 +1531,6 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Start Virtual Board" => "راه‌اندازی برد مجازی",
         "Open Virtual Board demo" => "باز کردن نمونهٔ برد مجازی",
         "Disconnect the current hardware or remote session before starting Virtual Board." => "پیش از راه‌اندازی برد مجازی، اتصال سخت‌افزار یا نشست راه‌دور را قطع کنید.",
-        "Seat motion" => "حرکت صندلی",
         "2D side" => "نمای دوبعدی از پهلو",
         "3D orbit" => "نمای سه‌بعدی چرخان",
         "Reset view" => "بازنشانی نما",

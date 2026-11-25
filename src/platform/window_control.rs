@@ -156,6 +156,7 @@ pub fn set_error(error: Option<String>) {
     }
 }
 pub fn snapshot() -> WindowStatus {
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut value = LIVE
         .lock()
         .ok()

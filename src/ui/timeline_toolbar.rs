@@ -3,7 +3,9 @@
 use crate::ui::palette::native::controls::CheckboxUiExt;
 use crate::app::PealayerApp;
 use crate::config::TimelineToolbarAction as Action;
-use eframe::egui::{self, Align2, Color32, FontId, Id, Rect, Response, Stroke, StrokeKind};
+use eframe::egui::{self, Align2, FontId, Id, Rect, Response, Stroke, StrokeKind};
+#[cfg(test)]
+use eframe::egui::Color32;
 
 const CELL: f32 = super::layout::TIMELINE_RULER_HEIGHT;
 

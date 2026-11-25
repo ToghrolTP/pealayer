@@ -550,7 +550,7 @@ mod tests {
     use super::*;
     use crate::{
         app::PealayerApp,
-        ui::layout::{PealayerTab as Tab, PealayerTabViewer},
+        ui::layout::PealayerTab as Tab,
     };
 
     #[cfg(feature = "workspace-terminal")]
