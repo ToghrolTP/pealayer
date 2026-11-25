@@ -609,8 +609,10 @@ impl PealayerApp {
         let cap=self.advertised_hardware().filter(|c|c.board_connected).ok_or("No connected board")?;
         let plan=crate::scene_apply::preflight(scene,selected,&cap,Some(&cap.pwm_configuration_revision)).map_err(|e|e.to_string())?;
         let now=std::time::Instant::now();
-        self.project.scene_operation=Some(crate::scene_apply::Operation::new(plan,now));
-        self.project.scene_ticket=None;self.project.scene_deadline=Some(now+crate::scene_apply::DEADLINE);
+        let operation=crate::scene_apply::Operation::new(plan,now);
+        self.project.scene_deadline=Some(operation.deadline());
+        self.project.scene_operation=Some(operation);
+        self.project.scene_ticket=None;
         Ok(())
     }
     fn poll_scene_operation(&mut self) {

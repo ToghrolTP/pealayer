@@ -135,9 +135,7 @@ pub struct Plan {
     outputs: Vec<Output>,
 }
 impl Plan {
-    pub fn pin(&self) -> &TargetPin {
-        &self.pin
-    }
+    #[cfg(test)]
     pub fn outputs(&self) -> &[Output] {
         &self.outputs
     }
@@ -1025,6 +1023,7 @@ impl Operation {
     pub fn is_finished(&self) -> bool {
         self.status != Status::Running
     }
+    #[cfg(test)]
     pub fn has_in_flight(&self) -> bool {
         self.in_flight.is_some()
     }

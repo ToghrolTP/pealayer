@@ -11,6 +11,7 @@ pub enum TerminalTarget {
     PortableShell,
 }
 impl TerminalTarget {
+    #[cfg(feature = "workspace-terminal")]
     fn label(self) -> &'static str {
         match self {
             Self::PcController => "PCController",
@@ -101,6 +102,7 @@ pub struct TerminalState {
     confirm_exit: bool,
     closing: bool,
     quit_after_close: bool,
+    #[cfg(feature = "workspace-terminal")]
     last_visibility_intent: Option<bool>,
     #[cfg(feature = "workspace-terminal")]
     retired: Vec<super::terminal_backend::Session>,

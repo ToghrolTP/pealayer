@@ -51,6 +51,7 @@ impl ToolbarPreferences {
         }
     }
 
+    #[cfg(any(feature = "workspace-toolbar", test))]
     fn move_command(&mut self, id: &str, delta: isize) {
         let mut order = self.ordered_ids();
         if let Some(index) = order.iter().position(|item| item == id) {
@@ -69,6 +70,7 @@ impl ToolbarPreferences {
         }
     }
 
+    #[cfg(any(feature = "workspace-toolbar", test))]
     fn move_to(&mut self, action: Command, target: Command, after: bool) -> bool {
         let catalog = commands();
         let mut order: Vec<_> = self
@@ -96,11 +98,17 @@ pub struct ToolbarState {
     pub preferences: ToolbarPreferences,
     pub palette_open: bool,
     pub editor_open: bool,
+    #[cfg(feature = "workspace-toolbar")]
     query: String,
+    #[cfg(feature = "workspace-toolbar")]
     selected: usize,
+    #[cfg(feature = "workspace-toolbar")]
     palette_was_open: bool,
+    #[cfg(feature = "workspace-toolbar")]
     previous_focus: Option<egui::Id>,
+    #[cfg(feature = "workspace-toolbar")]
     editor_was_open: bool,
+    #[cfg(feature = "workspace-toolbar")]
     editor_previous_focus: Option<egui::Id>,
 }
 
@@ -206,6 +214,7 @@ impl Command {
         )
     }
 
+    #[cfg(feature = "workspace-toolbar")]
     fn group(self) -> u8 {
         match self {
             Self::OpenMedia | Self::SaveTimeline | Self::Rail(RailAction::OpenLocation) => 0,

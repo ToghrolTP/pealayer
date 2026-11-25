@@ -11,6 +11,7 @@ pub(crate) mod copydata;
 pub mod linux;
 pub mod media_controls;
 #[cfg(any(test, all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android")))))]
+#[cfg_attr(not(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android")))), allow(dead_code))]
 mod mpris_session;
 #[cfg(target_os = "windows")]
 mod windows_media_session;
