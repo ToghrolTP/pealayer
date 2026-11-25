@@ -2752,6 +2752,7 @@ pub fn get_socket_path() -> PathBuf {
     }
 }
 
+#[cfg(windows)]
 fn local_endpoint_hash(identity: &str) -> u64 {
     identity
         .trim()

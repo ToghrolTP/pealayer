@@ -30,6 +30,7 @@ pub(crate) fn playback_button_role(app: &PealayerApp) -> &'static str {
 /// Neutral at rest; intent color belongs to an enabled hover/focus/press,
 /// or to a genuine active state (Pause while playing, for example).
 /// Keep egui's disabled visuals and opacity instead of overriding glyph ink.
+#[cfg(test)]
 pub(crate) fn contextual_transport_style(
     style: &mut egui::Style,
     palette: crate::config::ColorPalette,
@@ -55,20 +56,6 @@ pub(crate) fn contextual_transport_style(
     tint(&mut style.visuals.widgets.hovered);
     tint(&mut style.visuals.widgets.active);
     if active { tint(&mut style.visuals.widgets.inactive); }
-}
-
-pub(crate) fn draw_contextual_transport_button(
-    palette: crate::config::ColorPalette,
-    ui: &mut egui::Ui,
-    icon: &str,
-    role: &str,
-    active: bool,
-) -> egui::Response {
-    ui.scope(|ui| {
-        let enabled = ui.is_enabled();
-        contextual_transport_style(ui.style_mut(), palette, role, active, enabled);
-        ui.add_sized([30.0, 22.0], egui::Button::new(icon))
-    }).inner
 }
 
 /// A bounded horizontal volume strip, shared by responsive monitor layouts.

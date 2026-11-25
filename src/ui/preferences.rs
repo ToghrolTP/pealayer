@@ -339,6 +339,7 @@ fn preferences_helper_tab(args: &[String]) -> usize {
 
 struct StandalonePreferencesApp {
     draft: PreferencesDraft,
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     owner_hwnd: isize,
     owner_identity: String,
     native_window_initialized: bool,

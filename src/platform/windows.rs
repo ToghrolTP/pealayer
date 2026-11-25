@@ -164,6 +164,7 @@ static WINDOW_MOVE_RESIZE_ACTIVE: AtomicBool = AtomicBool::new(false);
 static WINDOW_MOVE_RESIZE_ENDED: AtomicBool = AtomicBool::new(false);
 static WINDOW_LIVE_VIDEO_DURING_MOVE: AtomicBool = AtomicBool::new(true);
 static WINDOW_COMPOSITOR_PACED_MOVE: AtomicBool = AtomicBool::new(true);
+#[cfg(target_os = "windows")]
 static WINDOW_MOVE_FRAME_PUMP_STARTED: AtomicBool = AtomicBool::new(false);
 static WINDOW_MOVE_FRAME_PUMP_THREAD: OnceLock<std::thread::Thread> = OnceLock::new();
 static SIMPLE_VIDEO_ASPECT_ENABLED: AtomicBool = AtomicBool::new(false);
@@ -186,8 +187,10 @@ static SHELL_FULLSCREEN: AtomicBool = AtomicBool::new(false);
 static SHELL_HAS_MEDIA: AtomicBool = AtomicBool::new(false);
 static SHELL_MEDIA_KEYS_ENABLED: AtomicBool = AtomicBool::new(true);
 static SHELL_REINITIALIZE: AtomicBool = AtomicBool::new(false);
+#[cfg(target_os = "windows")]
 static TASKBAR_BUTTON_CREATED_MESSAGE: AtomicU32 = AtomicU32::new(0);
 static TASKBAR_THUMBNAIL_CLIP_CLEARED_FOR: Mutex<Option<isize>> = Mutex::new(None);
+#[cfg(target_os = "windows")]
 static THUMBNAIL_METRICS_DIRTY: AtomicBool = AtomicBool::new(true);
 static THUMBNAIL_TOOLBAR_ADDED_HWND: AtomicIsize = AtomicIsize::new(0);
 static THUMBNAIL_TOOLBAR_ADD_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
@@ -201,6 +204,7 @@ static THUMBNAIL_TOOLBAR_LAST_ERROR: Mutex<Option<String>> = Mutex::new(None);
 #[cfg(target_os = "windows")]
 static THUMBNAIL_TOOLBAR_ICONS: Mutex<Vec<isize>> = Mutex::new(Vec::new());
 
+#[cfg(target_os = "windows")]
 fn queue_shell_command(command: u32) {
     queue_shell_selection(ShellCommand { id: command, board_target: None, media_key: false });
 }
@@ -231,6 +235,7 @@ pub fn is_application_foreground()->bool {
 #[cfg(not(target_os="windows"))]
 pub fn is_application_foreground()->bool {false}
 
+#[cfg(target_os = "windows")]
 fn queue_shell_selection(command: ShellCommand) {
     if let Ok(mut commands) = SHELL_COMMANDS.lock() {
         commands.push_back(command);
@@ -358,6 +363,7 @@ impl TaskbarState {
 
     // SetProgressValue cancels TBPF_INDETERMINATE. Never send a stale value for
     // verification/restart, even when the preceding transfer reached 100%.
+    #[cfg(any(target_os = "windows", test))]
     fn progress_value(&self) -> Option<u64> {
         match self.to_progress_flag() {
             TaskbarProgressFlag::Normal | TaskbarProgressFlag::Paused => Some(self.progress_percent.min(100) as u64),
@@ -446,20 +452,33 @@ pub fn get_registered_hwnd() -> isize {
 // modal loop used for a native title-bar drag or border resize. Egui does not
 // receive a pointer-down event for the non-client title bar, so its drag state
 // alone cannot distinguish this operation from ordinary playback.
+#[cfg(any(target_os = "windows", test))]
 const WM_ENTERSIZEMOVE_VALUE: u32 = 0x0231;
+#[cfg(any(target_os = "windows", test))]
 const WM_EXITSIZEMOVE_VALUE: u32 = 0x0232;
+#[cfg(target_os = "windows")]
 const WM_SIZING_VALUE: u32 = 0x0214;
+#[cfg(target_os = "windows")]
 const WM_MOVING_VALUE: u32 = 0x0216;
 
+#[cfg(any(target_os = "windows", test))]
 const WMSZ_LEFT_VALUE: usize = 1;
+#[cfg(any(target_os = "windows", test))]
 const WMSZ_RIGHT_VALUE: usize = 2;
+#[cfg(any(target_os = "windows", test))]
 const WMSZ_TOP_VALUE: usize = 3;
+#[cfg(any(target_os = "windows", test))]
 const WMSZ_TOPLEFT_VALUE: usize = 4;
+#[cfg(any(target_os = "windows", test))]
 const WMSZ_TOPRIGHT_VALUE: usize = 5;
+#[cfg(any(target_os = "windows", test))]
 const WMSZ_BOTTOM_VALUE: usize = 6;
+#[cfg(any(target_os = "windows", test))]
 const WMSZ_BOTTOMLEFT_VALUE: usize = 7;
+#[cfg(any(target_os = "windows", test))]
 const WMSZ_BOTTOMRIGHT_VALUE: usize = 8;
 
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct SimpleVideoAspectConstraint {
     aspect_ratio: f64,
@@ -467,6 +486,7 @@ struct SimpleVideoAspectConstraint {
     chrome_height: i32,
 }
 
+#[cfg(any(target_os = "windows", test))]
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct SizingRect {
@@ -494,6 +514,7 @@ struct MagneticDragSession {
     control_bypass: bool,
 }
 
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct SnapResult {
     snapped_x: bool,
@@ -528,7 +549,10 @@ impl MagneticDragSession {
     fn reset(&mut self) {
         *self = Self::new();
     }
+}
 
+#[cfg(any(target_os = "windows", test))]
+impl MagneticDragSession {
     fn apply(
         &mut self,
         target: SizingRect,
@@ -662,6 +686,7 @@ impl MagneticDragSession {
     }
 }
 
+#[cfg(any(target_os = "windows", test))]
 impl SnapAxisAnchor {
     fn acquire(
         &mut self,
@@ -683,6 +708,7 @@ impl SnapAxisAnchor {
     }
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn scaled_snap_threshold(threshold_dip: i32, dpi: u32) -> i32 {
     if threshold_dip <= 0 {
         return 0;
@@ -691,6 +717,7 @@ fn scaled_snap_threshold(threshold_dip: i32, dpi: u32) -> i32 {
     ((i64::from(threshold_dip) * dpi + 48) / 96).clamp(1, i64::from(i32::MAX)) as i32
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn nearest_snap_delta(first: i64, second: i64, threshold: i64) -> Option<i32> {
     [first, second]
         .into_iter()
@@ -699,6 +726,7 @@ fn nearest_snap_delta(first: i64, second: i64, threshold: i64) -> Option<i32> {
         .map(|delta| delta.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32)
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn snap_to_work_area(
     moving: SizingRect,
     work_area: SizingRect,
@@ -740,6 +768,7 @@ fn snap_to_work_area(
     )
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn translate_snap_axis(leading: i32, trailing: i32, delta: i64) -> (i32, i32) {
     let width = i64::from(trailing) - i64::from(leading);
     if width <= 0 {
@@ -761,6 +790,7 @@ pub fn configure_window_magnetic_snap(enabled: bool, distance_dip: i32) {
     }
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn reset_window_magnetic_drag() {
     if let Ok(mut drag) = WINDOW_MAGNETIC_DRAG.lock() {
         drag.reset();
@@ -872,6 +902,7 @@ unsafe fn constrain_native_moving_rect(hwnd: isize, lparam: isize) -> bool {
     handled
 }
 
+#[cfg(any(target_os = "windows", test))]
 impl SizingRect {
     fn width(self) -> i32 {
         self.right.saturating_sub(self.left)
@@ -938,6 +969,7 @@ pub fn set_simple_video_aspect_constraint(
     SIMPLE_VIDEO_ASPECT_ENABLED.store(true, Ordering::Release);
 }
 
+#[cfg(target_os = "windows")]
 fn simple_video_aspect_constraint() -> Option<SimpleVideoAspectConstraint> {
     if !SIMPLE_VIDEO_ASPECT_ENABLED.load(Ordering::Acquire) {
         return None;
@@ -953,6 +985,7 @@ fn simple_video_aspect_constraint() -> Option<SimpleVideoAspectConstraint> {
     })
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn width_driven_size(width: i32, constraint: SimpleVideoAspectConstraint) -> (i32, i32) {
     const MIN_VIDEO_WIDTH: i32 = 96;
     let video_width = width
@@ -967,6 +1000,7 @@ fn width_driven_size(width: i32, constraint: SimpleVideoAspectConstraint) -> (i3
     )
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn height_driven_size(height: i32, constraint: SimpleVideoAspectConstraint) -> (i32, i32) {
     const MIN_VIDEO_HEIGHT: i32 = 54;
     let video_height = height
@@ -981,6 +1015,7 @@ fn height_driven_size(height: i32, constraint: SimpleVideoAspectConstraint) -> (
     )
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn constrain_sizing_rect(
     rect: SizingRect,
     edge: usize,
@@ -1044,6 +1079,7 @@ unsafe fn constrain_native_sizing_rect(edge: usize, lparam: isize) -> bool {
     true
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn native_window_operation_transition(message: u32) -> Option<bool> {
     match message {
         WM_ENTERSIZEMOVE_VALUE => Some(true),
@@ -1052,6 +1088,7 @@ fn native_window_operation_transition(message: u32) -> Option<bool> {
     }
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn observe_native_window_message(message: u32) {
     let Some(active) = native_window_operation_transition(message) else {
         return;
@@ -2050,6 +2087,7 @@ pub const MEDIA_KEY_CMD_STOP: u32 = 2103;
 pub const MEDIA_KEY_CMD_NEXT: u32 = 2104;
 pub const MEDIA_KEY_CMD_PREVIOUS: u32 = 2105;
 
+#[cfg(any(target_os = "windows", test))]
 fn shell_command_for_appcommand(appcommand: u32, enabled: bool, has_media: bool) -> Option<u32> {
     if !enabled || !has_media {
         return None;
@@ -2067,6 +2105,7 @@ fn shell_command_for_appcommand(appcommand: u32, enabled: bool, has_media: bool)
     })
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn foreground_media_key(key: u32, enabled: bool, has_media: bool, foreground: bool) -> Option<u32> {
     if !foreground { return None; }
     let command = match key { 0xB0 => 11, 0xB1 => 12, 0xB2 => 13, 0xB3 => 14, _ => return None };

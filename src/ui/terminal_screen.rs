@@ -319,6 +319,7 @@ fn selected_text(screen: &vt100::Screen, selection: Option<(usize, usize)>) -> S
 
 /// Paint a bounded viewport. Consumed input is returned, never delivered here.
 /// The caller must also suppress earlier global shortcuts while this Id owns focus.
+#[cfg(test)]
 pub fn show(
     ui: &mut egui::Ui,
     parser: &mut Parser,

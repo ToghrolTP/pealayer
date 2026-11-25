@@ -7,6 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[allow(dead_code)]
 #[path = "../../../shared/appearance_choices.rs"]
 mod choices;
 use choices::{UiAnimationMode, UiControlDensity, UiFontFamily};
@@ -15,6 +16,7 @@ mod config_file_watcher;
 use config_file_watcher::ConfigFileWatcher;
 #[path = "../../../shared/local_config_path.rs"]
 mod local_config_path;
+#[cfg_attr(test, allow(dead_code))]
 #[path = "../../../assets/themes/native_fonts.rs"]
 mod native_fonts;
 #[path = "../../../shared/native_motion.rs"]

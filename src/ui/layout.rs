@@ -307,6 +307,7 @@ struct InlineEffectIdentityEdit {
     icon: String,
 }
 
+#[cfg(test)]
 fn request_effect_card_rename(ctx: &egui::Context, item_id: egui::Id) {
     ctx.data_mut(|data| data.insert_temp(item_id.with("rename-request"), true));
     ctx.request_repaint();
@@ -1335,6 +1336,7 @@ fn effect_card_header_widths(available_after_icon: f32, item_spacing: f32) -> (f
 }
 
 struct EffectCardHeaderResponse {
+    #[cfg_attr(not(test), allow(dead_code))]
     grip: egui::Response,
     icon: egui::Response,
     title: egui::Response,
@@ -2160,6 +2162,7 @@ fn pwm_editor_widths(row_width: f32, gap: f32) -> (f32, f32) {
     (slider_width, number_width)
 }
 
+#[cfg(test)]
 impl PwmEditorResponse {
     pub(crate) fn should_transmit(self, live_updates: bool) -> bool {
         if live_updates {
@@ -2639,6 +2642,7 @@ pub(super) fn remember_drag_offset_on_press(
     }
 }
 
+#[cfg(test)]
 fn effect_drag_source<R>(
     ui: &mut egui::Ui,
     id: egui::Id,

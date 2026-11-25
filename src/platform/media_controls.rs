@@ -367,6 +367,7 @@ impl MediaControlsManager {
         manager
     }
 
+    #[cfg(not(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android")))))]
     fn failed(&mut self) {
         self.retry_at = Some(Instant::now() + Duration::from_secs(5));
         if let Some(ctx) = &self.context {

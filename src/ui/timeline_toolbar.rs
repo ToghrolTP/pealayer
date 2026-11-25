@@ -36,6 +36,7 @@ fn ghost_rect(drag: &ToolbarDrag, pointer: egui::Pos2) -> Rect {
     ))
 }
 
+#[cfg(test)]
 fn control_outline(visuals: &egui::Visuals, selected: bool, pressed: bool) -> Stroke {
     // selection.stroke is contrast ink, NOT the accent outline color.
     super::action_customization::outline(visuals,selected,pressed)

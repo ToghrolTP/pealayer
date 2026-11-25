@@ -3098,7 +3098,6 @@ fn motion_seat_name(
 #[derive(serde::Deserialize)]
 struct RecordingColor {
     id: String,
-    label: String,
     hex: String,
 }
 
@@ -3110,6 +3109,7 @@ fn recording_colors() -> &'static [RecordingColor] {
     })
 }
 
+#[cfg(test)]
 fn recording_color(value: &str) -> egui::Color32 {
     if let Some([r,g,b]) = crate::config::parse_rgb_hex(value) { return egui::Color32::from_rgb(r,g,b); }
     let id = if value == "purple" { "violet" } else { value };
@@ -3129,6 +3129,7 @@ fn record_action_color() -> egui::Color32 {
     egui::Color32::from_rgb(205, 42, 54)
 }
 
+#[cfg(test)]
 fn paint_recording_swatch(ui: &egui::Ui, rect: egui::Rect, value: &str) {
     let center = egui::pos2(rect.left() + ui.spacing().button_padding.x + 5.0, rect.center().y);
     ui.painter()
@@ -3136,21 +3137,6 @@ fn paint_recording_swatch(ui: &egui::Ui, rect: egui::Rect, value: &str) {
     // White must remain distinguishable on light popup surfaces too.
     ui.painter()
         .circle_stroke(center, 5.0, egui::Stroke::new(1.0, egui::Color32::GRAY));
-}
-
-fn recording_color_label(ui: &egui::Ui, label: &str) -> egui::text::LayoutJob {
-    let mut job = egui::text::LayoutJob::default();
-    // Match the painted swatch's fixed 24 px lane. Ordinary spaces vary with
-    // font and selected/hover formatting, making the label visibly jump.
-    job.append(
-        label,
-        24.0,
-        egui::TextFormat::simple(
-            egui::TextStyle::Button.resolve(ui.style()),
-            ui.visuals().text_color(),
-        ),
-    );
-    job
 }
 
 fn recording_color_picker(ui: &mut egui::Ui, value: &mut String) -> egui::Response {
@@ -3168,6 +3154,7 @@ fn recording_color_picker(ui: &mut egui::Ui, value: &mut String) -> egui::Respon
     response
 }
 
+#[cfg(test)]
 fn paint_recording_icon(ui: &egui::Ui, rect: egui::Rect, value: &str) {
     if recording_color(value) == egui::Color32::WHITE && !ui.visuals().dark_mode {
         ui.painter().text(
@@ -3185,19 +3172,6 @@ fn paint_recording_icon(ui: &egui::Ui, rect: egui::Rect, value: &str) {
         egui::FontId::proportional(18.0),
         recording_color(value),
     );
-}
-
-fn recording_preview_detail(step: &crate::four_d::controller::HardwareMacroStep) -> String {
-    if !step.action_ids.is_empty() {
-        return step.action_ids.join(" · ");
-    }
-    match (step.target, step.value) {
-        (Some(target), Some(value)) => format!("target {target} · value {value}"),
-        (Some(target), None) => format!("target {target}"),
-        (None, Some(value)) => format!("value {value}"),
-        (None, None) if !step.text.trim().is_empty() => step.text.replace('\n', " · "),
-        _ => String::new(),
-    }
 }
 
 pub(crate) fn draw_effect_capture_controls(app: &mut PealayerApp, ui: &mut egui::Ui) {

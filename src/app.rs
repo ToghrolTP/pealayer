@@ -3381,25 +3381,6 @@ impl PealayerApp {
         .then(|| format!("\"{value}\""))
     }
 
-    fn controller_effect_program_hex(value: &str) -> Result<(String, String), String> {
-        let program: serde_json::Value = serde_json::from_str(value)
-            .map_err(|error| format!("Invalid lighting program JSON: {error}"))?;
-        let primitive = program
-            .get("primitive")
-            .and_then(serde_json::Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| "Lighting program requires a primitive".to_string())?
-            .to_string();
-        let canonical = serde_json::to_vec(&program)
-            .map_err(|error| format!("Encode lighting program: {error}"))?;
-        let encoded = canonical
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<Vec<_>>()
-            .join("");
-        Ok((primitive, encoded))
-    }
-
     fn request_hardware_effect_command(
         &mut self,
         operation: &str,
@@ -3457,23 +3438,6 @@ impl PealayerApp {
 
     pub(crate) fn discard_hardware_effect_recording(&mut self) -> Result<(), String> {
         self.request_hardware_effect_command("macro-discard", "effect record discard".to_string())
-    }
-
-    pub(crate) fn preview_strip_effect(&mut self, id: &str) -> Result<(), String> {
-        let advertised = self.advertised_hardware().is_some_and(|capabilities| {
-            capabilities.board_connected
-                && capabilities
-                    .strip_effects
-                    .iter()
-                    .any(|effect| effect.id == id)
-        });
-        if !advertised {
-            return Err("the selected strip effect is no longer advertised".to_string());
-        }
-        self.request_hardware_effect_command("effect-preview", format!("effect play {id}"))?;
-        self.hardware_effect_authoring
-            .begin_effect_preview(&format!("effect:{id}"), None);
-        Ok(())
     }
 
     pub(crate) fn stop_strip_preview(&mut self) -> Result<(), String> {
@@ -6792,21 +6756,6 @@ impl PealayerApp {
         self.save_config();
     }
 
-    pub(crate) fn cycle_workspace_profile(&mut self, ctx: &egui::Context) {
-        let profiles = self.ordered_workspace_profiles();
-        if profiles.is_empty() {
-            return;
-        }
-        let current = self
-            .active_workspace_profile
-            .as_ref()
-            .and_then(|active| profiles.iter().position(|(id, _)| id == active));
-        let next = current
-            .map(|index| (index + 1) % profiles.len())
-            .unwrap_or(0);
-        self.restore_workspace_profile(ctx, &profiles[next].0);
-    }
-
     pub(crate) fn delete_workspace_profile(&mut self, id: &str) {
         if let Some(profile) = self.workspace_profiles.remove(id) {
             if self.active_workspace_profile.as_deref() == Some(id) {
@@ -8846,17 +8795,6 @@ impl PealayerApp {
     pub(crate) fn set_direction(&mut self, preference: crate::config::AppDirection) {
         self.direction_preference = preference;
         self.rtl = crate::config::resolve_rtl(preference, self.language);
-        self.save_config();
-    }
-
-    pub(crate) fn set_theme(&mut self, ctx: &egui::Context, theme: crate::config::AppTheme) {
-        self.theme_preference = theme;
-        ctx.set_theme(match theme {
-            crate::config::AppTheme::System => egui::ThemePreference::System,
-            crate::config::AppTheme::Light => egui::ThemePreference::Light,
-            crate::config::AppTheme::Dark => egui::ThemePreference::Dark,
-        });
-        crate::ui::sync_native_window_appearance(ctx, self.color_palette);
         self.save_config();
     }
 

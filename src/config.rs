@@ -275,6 +275,7 @@ impl TimelineToolbarPreferences {
             | "timeline_toolbar_order" | "timeline_toolbar_hidden")
     }
 
+    #[cfg(test)]
     pub fn only_changed(previous: &AppConfig, next: &AppConfig) -> bool {
         let mut unrelated = next.clone();
         unrelated.timeline_toolbar_visible = previous.timeline_toolbar_visible;

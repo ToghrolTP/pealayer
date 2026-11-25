@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 #[derive(Default)]
 struct Preview {
     enabled: bool,
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     media: String,
     frame: Option<image::RgbaImage>,
     captured: Option<Instant>,
@@ -39,6 +40,7 @@ static REPAINT_WAKE: OnceLock<SyncSender<()>> = OnceLock::new();
 static FULL_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 #[cfg(target_os = "windows")]
 static MINIMIZE_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[cfg(target_os = "windows")]
 static MINIMIZE_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static MINIMIZE_WAITING: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
@@ -207,6 +209,7 @@ fn wake_native_window() {}
 // Win32 message values are stable ABI constants. Keeping this decision pure
 // lets every CI host verify that video-only rendering is limited to the small
 // taskbar thumbnail and never leaks into the full-size Peek preview.
+#[cfg(any(target_os = "windows", test))]
 fn is_static_thumbnail_request(message: u32) -> bool {
     message == 0x0323 // WM_DWMSENDICONICTHUMBNAIL
 }
@@ -321,6 +324,7 @@ pub fn configure(hwnd: isize, enabled: bool) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CapturePlan {
     Idle,
@@ -328,6 +332,7 @@ enum CapturePlan {
     RetryAfter(Duration),
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn capture_plan(
     enabled: bool,
     has_frame: bool,
