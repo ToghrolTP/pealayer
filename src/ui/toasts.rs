@@ -22,7 +22,7 @@ pub fn draw(ctx: &egui::Context, details_label: &str) -> Option<InteropCommand> 
                 ui.set_width(width);
                 for toast in state.toasts.iter().rev().take(4) {
                     ui.push_id((&state.instance_id, &toast.id, toast.created_at_ms), |ui| {
-                        let rect_id = ui.id().with("rect");
+                        let rect_id = ui.scope_id().with("rect");
                         let old_rect = ctx.data(|data| data.get_temp::<egui::Rect>(rect_id));
                         let hovered = old_rect.is_some_and(|rect| ui.rect_contains_pointer(rect));
                         let frame = egui::Frame::popup(ui.style()).inner_margin(12.0).show(ui, |ui| {

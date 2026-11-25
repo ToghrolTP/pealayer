@@ -330,7 +330,10 @@ pub(crate) fn search_view_header(
         crate::ui::dialog::singleline_text_edit(ui, search)
             .id_salt(search_id.with("input"))
             .hint_text(hint)
-            .horizontal_align(if rtl { egui::Align::Max } else { egui::Align::Min })
+            .align(egui::Align2([
+                if rtl { egui::Align::Max } else { egui::Align::Min },
+                egui::Align::Center,
+            ]))
             .margin(margin).desired_width(search_rect.width()));
     let icon_slot = egui::Rect::from_center_size(
         egui::pos2(if rtl { response.rect.right() - 14.0 } else { response.rect.left() + 14.0 }, row.center().y),

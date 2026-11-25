@@ -1216,7 +1216,7 @@ fn click_item(app: &mut PealayerApp, ui: &mut egui::Ui, item: Widget, progress: 
 fn draw_group(app: &mut PealayerApp, ui: &mut egui::Ui, end: bool, hardware: Option<&HardwareCapabilities>,
     log: &TelemetryLog, progress: &[StatusProgress], log_id: egui::Id, rects: &mut Vec<(Widget, egui::Rect)>, connection_width: f32,
     divider_color: egui::Color32) {
-    let background = ui.interact(ui.max_rect(), ui.id().with(("status-side", end)), egui::Sense::click());
+    let background = ui.interact(ui.max_rect(), ui.scope_id().with(("status-side", end)), egui::Sense::click());
     let items = group_items(app, end, hardware, progress);
     egui::ScrollArea::horizontal().id_salt(("status-side-scroll", end))
         .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
@@ -1323,7 +1323,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         // The themed frame already owns this boundary. Panel otherwise reserves
         // another point and paints a second line just outside the frame outline.
         .show_separator_line(false)
-        .show_inside(ui, |ui| {
+        .show(ui, |ui| {
         let family = super::fonts::status_family(ui);
         for font in ui.style_mut().text_styles.values_mut() {
             if font.family == egui::FontFamily::Proportional { font.family = family.clone(); }

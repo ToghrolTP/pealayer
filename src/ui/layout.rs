@@ -22,13 +22,13 @@ pub(crate) fn set_scroll_offset(state: &mut egui::scroll_area::State, offset: eg
 
 #[inline]
 pub(crate) fn set_scroll_offset_x(state: &mut egui::scroll_area::State, x: f32) {
-    let y = state.offset().y;
+    let y = state.clamped_offset().y;
     set_scroll_offset(state, egui::vec2(x, y));
 }
 
 #[inline]
 pub(crate) fn set_scroll_offset_y(state: &mut egui::scroll_area::State, y: f32) {
-    let x = state.offset().x;
+    let x = state.clamped_offset().x;
     set_scroll_offset(state, egui::vec2(x, y));
 }
 
@@ -1108,8 +1108,8 @@ fn fit_timeline_to_window(
             .clamp(TIMELINE_MIN_ZOOM, TIMELINE_MAX_ZOOM);
         if app.timeline_animated_navigation {
             let transition = TimelineNavigationTransition {
-                start_offset: timeline_scroll_state.offset(),
-                target_offset: egui::vec2(0.0, timeline_scroll_state.offset().y),
+                start_offset: timeline_scroll_state.clamped_offset(),
+                target_offset: egui::vec2(0.0, timeline_scroll_state.clamped_offset().y),
                 start_zoom: app.timeline_zoom,
                 target_zoom: fit_zoom,
                 started_at_seconds: ui.input(|input| input.time),
@@ -1253,7 +1253,7 @@ fn hover_icon_action(
 ) -> egui::Response {
     let previous_widget = ui.data(|data| data.get_temp::<egui::Id>(id.with("widget")));
     let focused = previous_widget.is_some_and(|widget| ui.memory(|memory| memory.has_focus(widget)));
-    let response = ui.scope_builder(egui::UiBuilder::new().id(id), |ui| {
+    let response = ui.scope_builder(egui::UiBuilder::new().scope_id(id), |ui| {
         // Keep stable geometry and keyboard traversal. Pointer actions reveal
         // anywhere on the card; keyboard focus reveals its action immediately.
         let alpha = crate::ui::motion::hover_alpha(ui, id.with("visible"), visible || focused);
@@ -1307,7 +1307,7 @@ fn effects_library_toolbar(app: &mut PealayerApp, ui: &mut egui::Ui, width: f32)
         let hint = app.tr("Search effects...");
         let align = crate::ui::i18n::input_alignment(app.rtl, &app.effects_search_query);
         let search = ui.add(crate::ui::dialog::singleline_text_edit(ui, &mut app.effects_search_query)
-            .horizontal_align(align).hint_text(hint).desired_width(ui.available_width()));
+            .align(egui::Align2([align, egui::Align::Center])).hint_text(hint).desired_width(ui.available_width()));
         search_rect = search.rect;
         if search.changed() {
             ui.ctx().request_repaint();
@@ -2565,7 +2565,7 @@ pub(crate) fn draw_pwm_card_editor(
     // Keep both the edit session and pointer/focus widget identities bound to
     // the actual channel, independent of its row, folder, or sibling actions.
     let editor_id = ui.make_persistent_id(("pwm-card-editor", control.key.as_str(), channel.id));
-    let response = ui.scope_builder(egui::UiBuilder::new().id(editor_id), |ui| {
+    let response = ui.scope_builder(egui::UiBuilder::new().scope_id(editor_id), |ui| {
         draw_pwm_control_editor(app, ui, control, &mut percent, row_width)
     }).inner;
     let raw = pwm_raw(percent);
@@ -4089,7 +4089,7 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
                         let name_editor = ui.add_sized(
                             [ui.available_width(), 28.0],
                             crate::ui::dialog::singleline_text_edit(ui, &mut template.name)
-                                .horizontal_align(name_align),
+                                .align(egui::Align2([name_align, egui::Align::Center])),
                         );
                         if name_editor.gained_focus() { push_undo = true; }
                         if name_editor.changed() { timeline_dirty = true; }
@@ -7446,7 +7446,7 @@ fn draw_display_text_tool(
                 [ui.available_width(), 54.0],
                 egui::TextEdit::multiline(&mut text)
                     .desired_rows(2)
-                    .horizontal_align(text_align)
+                    .align(egui::Align2([text_align, egui::Align::TOP]))
                     .hint_text(app.tr("Message for the board displays")),
             );
             if response.changed() {
@@ -7607,7 +7607,7 @@ fn hardware_header_widget<R>(
     render: impl FnOnce(&mut egui::Ui) -> R,
 ) -> R {
     let id = ui.make_persistent_id(("hardware-header-widget", channel_key, role));
-    ui.scope_builder(egui::UiBuilder::new().id(id), render)
+    ui.scope_builder(egui::UiBuilder::new().scope_id(id), render)
         .inner
 }
 
@@ -9149,7 +9149,7 @@ mod timeline_row_tests {
                             assert!(scroll.content_size.y <= available.height() + 1.0 + 1.0 / scale,
                                 "{width}x{height} at {scale}, loaded={loaded}: content {:?}, viewport {available:?}", scroll.content_size);
                             assert_eq!(viewer.scroll_bars(&PealayerTab::ProgramMonitor), [false, false]);
-                            assert_eq!(scroll.state.offset(), egui::Vec2::ZERO);
+                            assert_eq!(scroll.state.clamped_offset(), egui::Vec2::ZERO);
                         });
                         discard_ui_output(output);
                     }
@@ -9266,7 +9266,7 @@ mod timeline_row_tests {
                         assert!(body_painter.clip_rect().top() >= ruler.bottom());
                         observed.push((ruler.top(), timeline_track_row_top(content.top(), 0, 40.0)));
                     });
-                assert_eq!(scroll.state.offset().y, offset);
+                assert_eq!(scroll.state.clamped_offset().y, offset);
             });
             discard_ui_output(output);
         }
@@ -9977,7 +9977,7 @@ mod timeline_row_tests {
                         ui.add_space(8.0);
                     }
                 });
-                offset.set(scroll.state.offset().y);
+                offset.set(scroll.state.clamped_offset().y);
                 viewport_height.set(scroll.inner_rect.height());
                 content_height.set(scroll.content_size.y);
             });
@@ -10491,7 +10491,7 @@ mod timeline_row_tests {
                             revealed = body.contains_rect(cue);
                             cue.translate(-content.min.to_vec2())
                         });
-                    offset = timeline_offset_to_reveal_cue(scroll.state.offset(), scroll.inner, scroll.content_size, scroll.inner_rect.size());
+                    offset = timeline_offset_to_reveal_cue(scroll.state.clamped_offset(), scroll.inner, scroll.content_size, scroll.inner_rect.size());
                     if pass > 0 { assert!(revealed, "cue must be visible on both axes below the ruler"); }
                 }));
             }
@@ -11722,7 +11722,7 @@ mod timeline_row_tests {
         let mut output = context.run_ui(egui::RawInput::default(), |ui| {
             for (channel, observed) in [(1, 25.0), (2, 10.0)] {
                 ui.scope(|ui| {
-                    stable_ids.push(ui.id());
+                    stable_ids.push(ui.scope_id());
                     let session_id = pwm_editor_session_id(ui);
                     session_ids.push(session_id);
                     let mut percent = observed;
@@ -15065,7 +15065,7 @@ impl<'a> PealayerTabViewer<'a> {
                                             );
                                             let name_response = ui.add(
                                                 crate::ui::dialog::singleline_text_edit(ui, &mut draft.name)
-                                                    .horizontal_align(name_align)
+                                                    .align(egui::Align2([name_align, egui::Align::Center]))
                                                     .desired_width(250.0),
                                             );
                                             let focus_id = egui::Id::new("new-effect-group-name-focus");
@@ -16969,7 +16969,7 @@ impl<'a> PealayerTabViewer<'a> {
                                 }
                                 });
                                 timeline_header_scroll_id = Some(header_scroll.id);
-                                timeline_header_offset_y = header_scroll.state.offset().y;
+                                timeline_header_offset_y = header_scroll.state.clamped_offset().y;
                             });
 
                             // 2. Right column: Scrollable Timeline Grid
@@ -19269,7 +19269,7 @@ impl<'a> PealayerTabViewer<'a> {
                             if let Some(reveal) = cue_reveal.as_ref().filter(|reveal| reveal.pending_scroll) {
                                 if let Some(cue_rect) = requested_cue_rect {
                                     let target = timeline_offset_to_reveal_cue(
-                                        timeline_scroll_state.offset(), cue_rect,
+                                        timeline_scroll_state.clamped_offset(), cue_rect,
                                         timeline_content_size, timeline_viewport.size(),
                                     );
                                     ui.data_mut(|data| {
@@ -19281,7 +19281,7 @@ impl<'a> PealayerTabViewer<'a> {
                                     if self.app.timeline_animated_navigation {
                                         start_timeline_navigation_transition(
                                             ui, navigation_transition_id,
-                                            (timeline_scroll_state.offset(), self.app.timeline_zoom),
+                                            (timeline_scroll_state.clamped_offset(), self.app.timeline_zoom),
                                             (target, self.app.timeline_zoom),
                                             self.app.timeline_navigation_transition_ms,
                                         );
@@ -19350,7 +19350,7 @@ impl<'a> PealayerTabViewer<'a> {
                                 };
                             }
                             if let Some(action) = pending_timeline_toolbar_action.take() {
-                                let current_offset = timeline_scroll_state.offset();
+                                let current_offset = timeline_scroll_state.clamped_offset();
                                 let current_zoom = self.app.timeline_zoom;
                                 let mut navigation_target = None;
                                 match action {
@@ -19596,7 +19596,7 @@ impl<'a> PealayerTabViewer<'a> {
                                     // its old destination. Repeated wheel notches therefore remain
                                     // responsive while the rendered position eases toward the
                                     // accumulated target.
-                                    let current_offset = timeline_scroll_state.offset();
+                                    let current_offset = timeline_scroll_state.clamped_offset();
                                     let current_zoom = self.app.timeline_zoom;
                                     let mut target_offset = active_navigation_transition
                                         .map_or(current_offset, |transition| {
@@ -19693,7 +19693,7 @@ impl<'a> PealayerTabViewer<'a> {
                                             let pointer_x_in_viewport = if is_inside_viewport {
                                                 pointer_screen_x - timeline_viewport.left()
                                             } else {
-                                                let playhead_x = self.app.playback_time as f32 * zoom - timeline_scroll_state.offset().x;
+                                                let playhead_x = self.app.playback_time as f32 * zoom - timeline_scroll_state.clamped_offset().x;
                                                 if playhead_x >= 0.0 && playhead_x <= timeline_viewport.width() {
                                                     playhead_x
                                                 } else {
@@ -19702,7 +19702,7 @@ impl<'a> PealayerTabViewer<'a> {
                                             };
                                             let new_offset_x =
                                                 timeline_offset_for_pointer_zoom(
-                                                    timeline_scroll_state.offset().x,
+                                                    timeline_scroll_state.clamped_offset().x,
                                                     pointer_x_in_viewport,
                                                     zoom,
                                                     next_zoom,
@@ -19718,7 +19718,7 @@ impl<'a> PealayerTabViewer<'a> {
                                                 - timeline_viewport.width())
                                                 .max(0.0);
                                             let new_offset_x =
-                                                (timeline_scroll_state.offset().x - delta)
+                                                (timeline_scroll_state.clamped_offset().x - delta)
                                                     .clamp(0.0, max_offset);
                                             set_scroll_offset_x(&mut timeline_scroll_state, new_offset_x);
                                             timeline_scroll_changed = true;
@@ -19728,7 +19728,7 @@ impl<'a> PealayerTabViewer<'a> {
                                                 - timeline_viewport.height())
                                                 .max(0.0);
                                             let new_offset_y =
-                                                (timeline_scroll_state.offset().y - delta)
+                                                (timeline_scroll_state.clamped_offset().y - delta)
                                                     .clamp(0.0, max_offset);
                                             set_scroll_offset_y(&mut timeline_scroll_state, new_offset_y);
                                             timeline_scroll_changed = true;
@@ -19737,7 +19737,7 @@ impl<'a> PealayerTabViewer<'a> {
                                             let next_zoom = (zoom * zoom_factor).clamp(20.0, 500.0);
                                             let pointer_x = pointer_screen_x - timeline_viewport.left();
                                             let next_offset_x = timeline_offset_for_pointer_zoom(
-                                                timeline_scroll_state.offset().x, pointer_x, zoom, next_zoom,
+                                                timeline_scroll_state.clamped_offset().x, pointer_x, zoom, next_zoom,
                                                 total_seconds, timeline_viewport.width());
                                             self.app.timeline_zoom = next_zoom;
                                             let max_x = (total_seconds as f32 * next_zoom
@@ -19747,7 +19747,7 @@ impl<'a> PealayerTabViewer<'a> {
                                             let final_offset_x =
                                                 (next_offset_x - translation.x).clamp(0.0, max_x);
                                             let final_offset_y =
-                                                (timeline_scroll_state.offset().y - translation.y).clamp(0.0, max_y);
+                                                (timeline_scroll_state.clamped_offset().y - translation.y).clamp(0.0, max_y);
                                             set_scroll_offset(&mut timeline_scroll_state, egui::vec2(final_offset_x, final_offset_y));
                                             timeline_scroll_changed = true;
                                         }
@@ -19763,7 +19763,7 @@ impl<'a> PealayerTabViewer<'a> {
                                 });
                                 let dt = ui.input(|input| input.stable_dt);
                                 let max_x = (timeline_content_size.x - timeline_viewport.width()).max(0.0);
-                                let new_offset_x = (timeline_scroll_state.offset().x
+                                let new_offset_x = (timeline_scroll_state.clamped_offset().x
                                     + crate::ui::timeline_toolbar::held_pan_delta(
                                         held_timeline_pan, timeline_viewport.width(), dt))
                                     .clamp(0.0, max_x);
@@ -19813,7 +19813,7 @@ impl<'a> PealayerTabViewer<'a> {
 
                             let mut middle_pan_changed = false;
                             if middle_pan_active && middle_down {
-                                let previous_offset = timeline_scroll_state.offset();
+                                let previous_offset = timeline_scroll_state.clamped_offset();
                                 let constrained_delta = constrain_middle_pan_delta(
                                     pointer_delta,
                                     scroll_modifiers.shift,
@@ -19827,7 +19827,7 @@ impl<'a> PealayerTabViewer<'a> {
                                     timeline_viewport.size(),
                                 );
                                 set_scroll_offset(&mut timeline_scroll_state, new_offset);
-                                middle_pan_changed = timeline_scroll_state.offset() != previous_offset;
+                                middle_pan_changed = timeline_scroll_state.clamped_offset() != previous_offset;
                                 ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                                 ui.ctx().request_repaint();
                             }
@@ -19859,19 +19859,19 @@ impl<'a> PealayerTabViewer<'a> {
                                     * self.app.timeline_zoom)
                                     .min(content_width);
                                 if let Some(target_x) = timeline_follow_target_offset(
-                                    timeline_scroll_state.offset().x,
+                                    timeline_scroll_state.clamped_offset().x,
                                     playhead_x,
                                     content_width,
                                     timeline_viewport.width(),
                                 ) {
                                     let target_offset = egui::vec2(
                                         target_x,
-                                        timeline_scroll_state.offset().y,
+                                        timeline_scroll_state.clamped_offset().y,
                                     );
                                     if self.app.timeline_animated_navigation {
                                         start_timeline_navigation_transition(
                                             ui, navigation_transition_id,
-                                            (timeline_scroll_state.offset(), self.app.timeline_zoom),
+                                            (timeline_scroll_state.clamped_offset(), self.app.timeline_zoom),
                                             (target_offset, self.app.timeline_zoom),
                                             self.app.timeline_navigation_transition_ms,
                                         );
@@ -19885,8 +19885,8 @@ impl<'a> PealayerTabViewer<'a> {
                                 timeline_scroll_state.store(ui.ctx(), timeline_scroll_id);
                             }
 
-                            self.app.project.scroll = [timeline_scroll_state.offset().x,timeline_scroll_state.offset().y];
-                            let synced_offset_y = timeline_scroll_state.offset().y;
+                            self.app.project.scroll = [timeline_scroll_state.clamped_offset().x,timeline_scroll_state.clamped_offset().y];
+                            let synced_offset_y = timeline_scroll_state.clamped_offset().y;
                             ui.ctx().data_mut(|data| {
                                 data.insert_persisted(
                                     timeline_vertical_sync_id,
@@ -19896,7 +19896,7 @@ impl<'a> PealayerTabViewer<'a> {
                             if let Some(header_scroll_id) = timeline_header_scroll_id
                                 && let Some(mut header_state) =
                                     egui::scroll_area::State::load(ui.ctx(), header_scroll_id)
-                                && header_state.offset().y != synced_offset_y
+                                && header_state.clamped_offset().y != synced_offset_y
                             {
                                 set_scroll_offset_y(&mut header_state, synced_offset_y);
                                 header_state.store(ui.ctx(), header_scroll_id);
@@ -20178,19 +20178,19 @@ impl<'a> PealayerTabViewer<'a> {
                                         (self.app.playback_time.max(0.0) as f32 * zoom)
                                             .min(timeline_content_size.x);
                                     let target_offset_x = timeline_offset_to_reveal_x(
-                                        timeline_scroll_state.offset().x,
+                                        timeline_scroll_state.clamped_offset().x,
                                         playhead_x,
                                         timeline_content_size.x,
                                         timeline_viewport.width(),
                                     );
                                     if self.app.timeline_animated_navigation
-                                        && (target_offset_x - timeline_scroll_state.offset().x).abs()
+                                        && (target_offset_x - timeline_scroll_state.clamped_offset().x).abs()
                                             > 0.5
                                     {
                                         start_timeline_navigation_transition(
                                             ui, navigation_transition_id,
-                                            (timeline_scroll_state.offset(), self.app.timeline_zoom),
-                                            (egui::vec2(target_offset_x, timeline_scroll_state.offset().y), self.app.timeline_zoom),
+                                            (timeline_scroll_state.clamped_offset(), self.app.timeline_zoom),
+                                            (egui::vec2(target_offset_x, timeline_scroll_state.clamped_offset().y), self.app.timeline_zoom),
                                             self.app.timeline_navigation_transition_ms,
                                         );
                                     } else {
@@ -20250,8 +20250,8 @@ impl<'a> PealayerTabViewer<'a> {
                                     if !self.app.timeline_animated_navigation {
                                         timeline_scroll_state.store(ui.ctx(), timeline_scroll_id);
                                         self.app.project.scroll = [
-                                            timeline_scroll_state.offset().x,
-                                            timeline_scroll_state.offset().y,
+                                            timeline_scroll_state.clamped_offset().x,
+                                            timeline_scroll_state.clamped_offset().y,
                                         ];
                                     }
                                     ui.close();
@@ -20474,7 +20474,7 @@ impl<'a> PealayerTabViewer<'a> {
                                     }
                                 } else if scroll_up_pressed || scroll_down_pressed {
                                     let direction = if scroll_up_pressed { -1.0 } else { 1.0 };
-                                    let val = (timeline_scroll_state.offset().y
+                                    let val = (timeline_scroll_state.clamped_offset().y
                                         + direction * timeline_track_height)
                                         .clamp(
                                         0.0,
@@ -20484,7 +20484,7 @@ impl<'a> PealayerTabViewer<'a> {
                                     set_scroll_offset_y(&mut timeline_scroll_state, val);
                                 } else if page_left_pressed || page_right_pressed {
                                     let direction = if page_left_pressed { -1.0 } else { 1.0 };
-                                    let val = (timeline_scroll_state.offset().x
+                                    let val = (timeline_scroll_state.clamped_offset().x
                                         + direction * timeline_viewport.width() * 0.85)
                                         .clamp(
                                             0.0,
@@ -20688,7 +20688,7 @@ impl<'a> craft_ui::docking::DockContent<PealayerTab> for PealayerTabViewer<'a> {
 
     fn group_header(&mut self, ui: &mut egui::Ui, panels: &[PealayerTab], active: &PealayerTab, _floating: bool) {
         let slots = super::panel_chrome::craft_actions(ui.max_rect(), self.app.rtl,self.header_options.collapse);
-        let response = super::panel_chrome::button(ui, slots[0], ui.id().with("panel-menu"),
+        let response = super::panel_chrome::button(ui, slots[0], ui.scope_id().with("panel-menu"),
             crate::ui::icons::DOTS_THREE, &self.app.tr("Panel menu"));
         egui::Popup::menu(&response).show(|ui| {
             self.draw_context_menu(ui, *active);
@@ -20704,7 +20704,7 @@ impl<'a> craft_ui::docking::DockContent<PealayerTab> for PealayerTabViewer<'a> {
             let collapsed=super::panel_chrome::group_collapsed(self.app,ui.ctx(),panels,*active);
             let glyph=if collapsed {if self.app.rtl {crate::ui::icons::CARET_LEFT}else{crate::ui::icons::CARET_RIGHT}}else{crate::ui::icons::CARET_DOWN};
             let response=ui.add_enabled_ui(!self.app.dock_state.locked,|ui|
-                super::panel_chrome::button(ui,*rect,ui.id().with("panel-collapse"),glyph,
+                super::panel_chrome::button(ui,*rect,ui.scope_id().with("panel-collapse"),glyph,
                     &self.app.tr(if collapsed {"Expand panel"}else{"Collapse panel"}))).inner;
             if response.clicked() {
                 super::panel_chrome::toggle_collapse(self.app,ui.ctx(),panels);
@@ -21328,7 +21328,7 @@ mod dock_content_tests {
                 });
             }));
         }
-        assert!(egui::scroll_area::State::load(&ctx, id.get()).unwrap().offset().y > 0.0);
+        assert!(egui::scroll_area::State::load(&ctx, id.get()).unwrap().clamped_offset().y > 0.0);
         assert_eq!(panel_scroll_axes(&PealayerTab::ProgramMonitor), [false, false]);
         assert_eq!(panel_scroll_axes(&PealayerTab::HardwareMonitor), [false, false]);
     }

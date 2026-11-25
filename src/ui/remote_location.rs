@@ -102,7 +102,7 @@ pub fn draw(app: &mut PealayerApp, ctx: &egui::Context) {
                 ui.separator();
                 ui.horizontal(|ui| {
                     let mut grid = state.view_mode == remote::ViewMode::Grid;
-                    icons::search_view_header(ui, &mut view.filter, ui.id().with("remote-search"), &mut grid, "Filter files...", app.language);
+                    icons::search_view_header(ui, &mut view.filter, ui.scope_id().with("remote-search"), &mut grid, "Filter files...", app.language);
                     if grid != (state.view_mode == remote::ViewMode::Grid) {
                         app.apply_interop_command(ctx, crate::platform::interop::InteropCommand::UpdateConfig {values:serde_json::json!({"remote_folder_view":if grid {"grid"} else {"list"}})}, "Remote browser layout");
                     }

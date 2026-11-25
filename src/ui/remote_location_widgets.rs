@@ -208,7 +208,7 @@ pub(super) fn entry(
     let action_response = ui
         .interact(
             button,
-            ui.id().with("activate"),
+            ui.scope_id().with("activate"),
             if enabled {
                 egui::Sense::click()
             } else {
@@ -263,7 +263,7 @@ pub(super) fn entry(
     });
     #[cfg(test)]
     ui.data_mut(|data| {
-        data.insert_temp(ui.id().with("entry-geometry"), (rect, thumb, text, button))
+        data.insert_temp(ui.scope_id().with("entry-geometry"), (rect, thumb, text, button))
     });
     if action.is_none() && !state.loading {
         if response.double_clicked() {
@@ -454,7 +454,7 @@ fn placeholder(ui: &mut egui::Ui, rect: egui::Rect, error: Option<&str>) {
             ink,
         );
     }
-    ui.interact(rect, ui.id().with("preview-hint"), egui::Sense::hover())
+    ui.interact(rect, ui.scope_id().with("preview-hint"), egui::Sense::hover())
         .on_hover_text(error.unwrap_or("Fetching thumbnail…"));
 }
 
@@ -682,7 +682,7 @@ mod tests {
                         grid,
                         egui::vec2(item_width, height),
                     );
-                    geometry = ui.data(|data| data.get_temp(ui.id().with("entry-geometry")));
+                    geometry = ui.data(|data| data.get_temp(ui.scope_id().with("entry-geometry")));
                 });
             },
         );

@@ -835,9 +835,9 @@ fn manager_channel_row<R>(
         egui::vec2(width, MANAGER_ROW_HEIGHT),
     );
     let id = ui.make_persistent_id(("manager-channel-row", key));
-    ui.scope_builder(egui::UiBuilder::new().id(id).layer_id(layer_id), |ui| {
+    ui.scope_builder(egui::UiBuilder::new().scope_id(id).layer_id(layer_id), |ui| {
         ui.multiply_opacity(opacity);
-        let background = ui.interact(rect, ui.id().with("manage"), egui::Sense::click());
+        let background = ui.interact(rect, ui.scope_id().with("manage"), egui::Sense::click());
         let content = egui::Frame::new()
             .inner_margin(egui::Margin::symmetric(
                 MANAGER_ROW_MARGIN,
@@ -896,7 +896,7 @@ fn manager_channel_name(
     cancel_help: &str,
 ) -> Option<ManagerNameAction> {
     let id = ui.make_persistent_id(("manager-channel-name-slot", key));
-    ui.scope_builder(egui::UiBuilder::new().id(id), |ui| {
+    ui.scope_builder(egui::UiBuilder::new().scope_id(id), |ui| {
         ui.spacing_mut().item_spacing.x = MANAGER_NAME_GAP;
         ui.spacing_mut().interact_size.y = MANAGER_NAME_HEIGHT;
         ui.spacing_mut().button_padding = egui::vec2(4.0, 2.0);
@@ -906,7 +906,7 @@ fn manager_channel_name(
             |ui| {
                 let button = |ui: &mut egui::Ui, role: &str, icon: &str, tooltip: &str| {
                     let id = ui.make_persistent_id(role);
-                    ui.scope_builder(egui::UiBuilder::new().id(id), |ui| {
+                    ui.scope_builder(egui::UiBuilder::new().scope_id(id), |ui| {
                         ui.add_sized(
                             [MANAGER_NAME_ACTION_WIDTH, MANAGER_NAME_HEIGHT],
                             egui::Button::new(
@@ -944,7 +944,7 @@ fn manager_channel_name(
                         (width - MANAGER_NAME_ACTION_WIDTH - MANAGER_NAME_GAP).max(1.0);
                     let caption_id = ui.make_persistent_id("caption");
                     let caption = ui
-                        .scope_builder(egui::UiBuilder::new().id(caption_id), |ui| {
+                        .scope_builder(egui::UiBuilder::new().scope_id(caption_id), |ui| {
                             let (rect, response) = ui.allocate_exact_size(
                                 egui::vec2(caption_width, MANAGER_NAME_HEIGHT),
                                 egui::Sense::click(),
@@ -1430,8 +1430,7 @@ fn draw_channel_manager_page(
                                         [42.0, crate::ui::control_density::height(ui)],
                                         crate::ui::dialog::singleline_text_edit(ui, &mut order_draft)
                                             .id(order_edit_id)
-                                            .horizontal_align(egui::Align::Center)
-                                            .vertical_align(egui::Align::Center)
+                                            .align(egui::Align2::CENTER_CENTER)
                                             .font(egui::TextStyle::Monospace)
                                             .char_limit(3),
                                     )
@@ -2698,7 +2697,7 @@ fn draw_channel_detail_page(
                                         crate::ui::dialog::singleline_text_edit(ui,
                                             &mut app.hardware_control_name_draft,
                                         )
-                                        .horizontal_align(align),
+                                        .align(egui::Align2([align, egui::Align::Center])),
                                     );
                                     ui.end_row();
 

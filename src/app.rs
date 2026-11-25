@@ -2120,7 +2120,7 @@ impl eframe::App for PealayerApp {
 
         egui::CentralPanel::default()
             .frame(frame)
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 if self.show_four_d_editor {
                     // Requests emitted while drawing a panel are retained for
                     // the next render, when DockArea can actually raise it.

@@ -22,7 +22,7 @@ pub(crate) fn take_action(
     rect: egui::Rect,
     bindings: Buttons,
 ) -> Option<Action> {
-    take_action_for(ui, rect, bindings, ui.id())
+    take_action_for(ui, rect, bindings, ui.scope_id())
 }
 pub(crate) fn take_action_for(
     ui: &mut egui::Ui,

@@ -341,7 +341,7 @@ fn item_menu(action: RailAction, app: &mut PealayerApp, ui: &mut egui::Ui) {
 /// Native Phosphor targets share the application palette and never change size on hover.
 fn rail_button(ui: &mut egui::Ui, rect: Rect, action: RailAction, label: &str, enabled: bool, selected: bool, rtl: bool) -> egui::Response {
     let response = ui.interact(rect, Id::unique(("sidebar-shortcut", action)), egui::Sense::click_and_drag());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
     let tokens = super::craft_theme::current(ui.ctx());
     let enabled = enabled && response.enabled();
     let hovered = enabled && response.hovered();
@@ -389,11 +389,11 @@ pub(super) fn show(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 .fill(ui.visuals().panel_fill)
                 .inner_margin(egui::Margin::symmetric(0, 8)),
         )
-        .show_inside(ui, |ui| {
+        .show(ui, |ui| {
             egui::Panel::bottom(Id::unique("sidebar-shortcuts-footer"))
                 .show_separator_line(false)
                 .frame(egui::Frame::NONE)
-                .show_inside(ui, |ui| {
+                .show(ui, |ui| {
                     ui.vertical_centered(|ui| {
                         let response = ui
                             .button(icons::DOTS_THREE)
@@ -712,7 +712,7 @@ mod tests {
             },
             |ui| {
                 show(app, ui);
-                egui::CentralPanel::default().show_inside(ui, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     drop_target(app, ui, Some(Tab::ProgramMonitor));
                 });
                 commit_drop(app, ctx);

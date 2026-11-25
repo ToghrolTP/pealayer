@@ -227,7 +227,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let language = app.language;
     let rtl = app.rtl;
 
-    let menu = egui::Panel::top("menu_bar").show_inside(ui, |ui| {
+    let menu = egui::Panel::top("menu_bar").show(ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.with_layout(crate::ui::i18n::layout(rtl, egui::Align::Center), |ui| {
                 top_menu_button(ui, app.tr("File"), |ui| {

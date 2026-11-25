@@ -242,7 +242,7 @@ fn overview(
             ui.add_enabled(
                 app.board_operation.is_none(),
                 crate::ui::dialog::singleline_text_edit(ui, &mut app.board_name_draft)
-                    .horizontal_align(name_align)
+                    .align(egui::Align2([name_align, egui::Align::Center]))
                     .char_limit(8)
                     .desired_width(150.0),
             );

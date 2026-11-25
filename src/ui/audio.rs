@@ -56,7 +56,7 @@ pub(crate) fn draw_sfx_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         ui.dropdown_value(&mut program.output_device, String::new(), designer_tr(ui, "Preferences SFX output"));
                         for device in &devices { ui.dropdown_value(&mut program.output_device, device.name.clone(), &device.description).on_hover_text(&device.name); }
                     });
-                    let key = ui.id().with("sfx-output-open"); let was_open = ui.data_mut(|d| d.get_temp::<bool>(key).unwrap_or(false));
+                    let key = ui.scope_id().with("sfx-output-open"); let was_open = ui.data_mut(|d| d.get_temp::<bool>(key).unwrap_or(false));
                     if popup.inner.is_some() && !was_open {
                         if let Some(client) = crate::peer::client() {
                             let _ = client.queue("/api/player/command", serde_json::to_value(crate::platform::interop::InteropCommand::RefreshAudioOutputs).unwrap());
