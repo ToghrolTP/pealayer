@@ -1085,6 +1085,8 @@ impl eframe::App for PealayerApp {
     }
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         let _timing = crate::performance::span(crate::performance::Phase::Logic);
+        #[cfg(not(target_os = "windows"))]
+        let _ = frame;
         self.flush_timeline_toolbar_save(ctx);
         self.flush_status_bar_save(ctx);
         self.flush_control_bar_save(ctx);

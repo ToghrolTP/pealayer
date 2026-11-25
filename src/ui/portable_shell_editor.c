@@ -74,8 +74,10 @@ static ps_settings_editor *local_editor(ph_editor *e,unsigned id,unsigned *local
 }
 static int panel_read(void *context,unsigned id,ps_control_value *out){
     ph_editor *e=(ph_editor *)context;unsigned local;ps_settings_editor *editor=local_editor(e,id,&local);
-    if(!editor)return 0;int ok=ps_settings_editor_read(editor,local,out);
-    if(e->values[id].pending)out->flags|=PS_CONTROL_PENDING;return ok;
+    if(!editor)return 0;
+    int ok=ps_settings_editor_read(editor,local,out);
+    if(e->values[id].pending)out->flags|=PS_CONTROL_PENDING;
+    return ok;
 }
 static int panel_write(void *context,unsigned id,const ps_control_value *value,ps_u32 revision){
     ph_editor *e=(ph_editor *)context;unsigned local;ps_settings_editor *editor=local_editor(e,id,&local);
@@ -107,7 +109,8 @@ static int panel_key(ps_session *session,unsigned key,void *context){
     ph_editor *e=(ph_editor *)context;
     if(key==PS_KEY_F4){unsigned id;if(e->open&&ps_panel_selection(session,&id)&&id<e->count)e->open(e->context,e->values[id].name);return 1;}
     if(key!=PS_KEY_F6)return 0;
-    if(ps_panel_set_key_names(session,!e->key_names))e->key_names=!e->key_names;return 1;
+    if(ps_panel_set_key_names(session,!e->key_names))e->key_names=!e->key_names;
+    return 1;
 }
 int ph_editor_open(ph_editor *e,ps_session *s){
     static const ps_column columns[]={{"Control",28,48,1},{"Value",16,0,2}};
