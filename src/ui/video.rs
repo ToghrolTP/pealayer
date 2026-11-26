@@ -407,7 +407,7 @@ fn draw_composition(app: &PealayerApp, ui: &mut egui::Ui, dest: egui::Rect, ppi:
         || (app.is_scrubbing || app.pending_scrub_commit.is_some()) && app.active_pseudo_frame.is_some();
     let visible = composition::update(&app.mpv_client, dest, ppi, &media, !covered);
 
-    let cache_id = ui.id().with("directcomposition-fallback");
+    let cache_id = ui.scope_id().with("directcomposition-fallback");
     if !visible && !media.is_empty() {
         sync_native_osd(app, ui.ctx(), None, dest.size());
         let current = ui.ctx().data(|data| data.get_temp::<(String, u64, egui::TextureHandle)>(cache_id))
