@@ -407,7 +407,7 @@ fn draw_composition(app: &PealayerApp, ui: &mut egui::Ui, dest: egui::Rect, ppi:
         || (app.is_scrubbing || app.pending_scrub_commit.is_some()) && app.active_pseudo_frame.is_some();
     let visible = composition::update(&app.mpv_client, dest, ppi, &media, !covered);
 
-    let cache_id = ui.id().with("directcomposition-fallback");
+    let cache_id = ui.scope_id().with("directcomposition-fallback");
     if !visible && !media.is_empty() {
         sync_native_osd(app, ui.ctx(), None, dest.size());
         let current = ui.ctx().data(|data| data.get_temp::<(String, u64, egui::TextureHandle)>(cache_id))
@@ -458,7 +458,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let gesture_rect = if app.video_click_frame_only && app.current_video_path.is_some() {
         dest_rect
     } else { rect };
-    let response = ui.interact(gesture_rect, ui.id().with("video-surface-gestures"), egui::Sense::click_and_drag());
+    let response = ui.interact(gesture_rect, ui.scope_id().with("video-surface-gestures"), egui::Sense::click_and_drag());
     let is_fullscreen = app.fullscreen_intent(ui.ctx());
     let simple_aspect_lock =
         app.consistent_video_aspect_ratio && !app.show_four_d_editor && !is_fullscreen;

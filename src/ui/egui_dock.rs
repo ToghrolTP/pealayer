@@ -591,7 +591,6 @@ pub fn show(app: &mut PealayerApp, ui: &mut egui::Ui, reveal: Option<Tab>) {
             .style(style)
             .draggable_tabs(!locked && !blocked)
             .show_close_buttons(!locked)
-            .show_window_close_buttons(!locked)
             .show_leaf_close_all_buttons(!locked)
             .show_leaf_collapse_buttons(show_disclosure)
             .show_inside(ui, &mut viewer);

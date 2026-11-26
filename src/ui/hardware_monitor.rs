@@ -97,7 +97,7 @@ pub(crate) fn empty_card(
                             .response;
                         response.widget_info(|| {
                             egui::WidgetInfo::labeled(
-                                egui::WidgetType::Button,
+                                egui::Role::Button,
                                 response.enabled(),
                                 hint.title,
                             )

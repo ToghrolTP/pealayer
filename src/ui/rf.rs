@@ -484,7 +484,7 @@ fn choices(
         } else {
             &selected
         });
-    crate::ui::dropdown::ComboBox::from_id_salt((ui.id(), field))
+    crate::ui::dropdown::ComboBox::from_id_salt((ui.scope_id(), field))
         .selected_text(caption)
         .width(field_width(ui))
         .truncate()
@@ -880,7 +880,7 @@ fn learned_selector(ui: &mut egui::Ui, signal: &mut Value, catalog: &Value) {
             )
         })
         .unwrap_or_else(|| "Choose an RF code…".into());
-    crate::ui::dropdown::ComboBox::from_id_salt((ui.id(), "learned_button"))
+    crate::ui::dropdown::ComboBox::from_id_salt((ui.scope_id(), "learned_button"))
         .selected_text(caption)
         .width(field_width(ui))
         .truncate()
@@ -932,7 +932,7 @@ fn number(ui: &mut egui::Ui, label: &'static str, value: &mut Value, field: &str
 }
 
 fn action_editor(ui: &mut egui::Ui, action: &mut Value, catalog: &Value) {
-    egui::Grid::new((ui.id(), "action_fields"))
+    egui::Grid::new((ui.scope_id(), "action_fields"))
         .num_columns(2)
         .spacing([16.0, 6.0])
         .show(ui, |ui| {

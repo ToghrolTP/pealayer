@@ -2184,7 +2184,7 @@ fn draw_sequence_timeline(
                 }, scroll.inner_rect.center().x));
             }
             if let Some((action, pointer_x)) = pending_wheel {
-                let (new_zoom, new_offset) = sequence_wheel_navigation(zoom, scroll.state.offset(),
+                let (new_zoom, new_offset) = sequence_wheel_navigation(zoom, scroll.state.clamped_offset(),
                     scroll.inner_rect, scroll.content_size, label_width, duration_ms, action, pointer_x);
                 zoom = new_zoom;
                 crate::ui::layout::set_scroll_offset(&mut scroll.state, new_offset);
@@ -2194,7 +2194,7 @@ fn draw_sequence_timeline(
             }
             #[cfg(test)]
             ui.data_mut(|data| data.insert_temp(egui::Id::new((state_prefix.clone(), "viewport-fixture")),
-                (scroll.inner_rect, scroll.state.offset(), scroll.content_size)));
+                (scroll.inner_rect, scroll.state.clamped_offset(), scroll.content_size)));
 
             let shortcut_enabled = ui.is_enabled() && !egui::Popup::is_any_open(ui.ctx())
                 && (cue_has_focus || (!ui.ctx().egui_wants_keyboard_input() && ui.rect_contains_pointer(ui.max_rect())));
@@ -2812,7 +2812,7 @@ fn draw_sequence_step_editor(
                                     crate::ui::i18n::input_alignment(rtl_ui, &step.text);
                                 ui.add(
                                     crate::ui::dialog::singleline_text_edit(ui, &mut step.text)
-                                        .horizontal_align(text_align),
+                                        .align(egui::Align2([text_align, egui::Align::Center])),
                                 );
                                 ui.end_row();
                                 ui.label(crate::ui::effects_library::designer_label(ui, "Length"));
@@ -2993,7 +2993,7 @@ fn draw_sequence_step_editor(
                                     crate::ui::i18n::input_alignment(rtl_ui, &step.text);
                                 ui.add(
                                     crate::ui::dialog::singleline_text_edit(ui, &mut step.text)
-                                        .horizontal_align(text_align),
+                                        .align(egui::Align2([text_align, egui::Align::Center])),
                                 );
                                 ui.end_row();
                             }
@@ -3685,7 +3685,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 |ui| {
                     let footer = egui::Panel::bottom("controller_effect_editor_actions")
                         .resizable(false)
-                        .show_inside(ui, |ui| {
+                        .show(ui, |ui| {
                             discard_requested |= draw_designer_actions(app, ui, capture_locked,
                                 capabilities.as_ref().is_some_and(|hardware| hardware.board_connected));
                         });
@@ -3745,7 +3745,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     );
                                     ui.add(
                                         crate::ui::dialog::singleline_text_edit(ui, &mut draft.name)
-                                            .horizontal_align(name_align)
+                                            .align(egui::Align2([name_align, egui::Align::Center]))
                                             .desired_width(320.0),
                                     );
                                     ui.end_row();
@@ -3916,7 +3916,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                                     crate::ui::dialog::singleline_text_edit(ui,
                                                         &mut app.effect_library_draft.label,
                                                     )
-                                                    .horizontal_align(label_align),
+                                                    .align(egui::Align2([label_align, egui::Align::Center])),
                                                 );
                                                 ui.end_row();
                                                 ui.label(crate::ui::effects_library::designer_label(ui, "LCD message"));
@@ -3928,7 +3928,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                                     crate::ui::dialog::singleline_text_edit(ui,
                                                         &mut app.effect_library_draft.lcd_message,
                                                     )
-                                                    .horizontal_align(lcd_align),
+                                                    .align(egui::Align2([lcd_align, egui::Align::Center])),
                                                 );
                                                 ui.end_row();
                                             });
@@ -3960,7 +3960,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     egui::TextEdit::multiline(
                                         &mut app.effect_library_draft.description,
                                     )
-                                    .horizontal_align(description_align)
+                                    .align(egui::Align2([description_align, egui::Align::TOP]))
                                     .desired_rows(3),
                                 );
                                 });

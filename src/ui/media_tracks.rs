@@ -120,7 +120,7 @@ pub(crate) fn header_button(
             egui::Sense::hover(),
         );
         let response = ui.interact(rect, id, egui::Sense::click());
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, help));
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, help));
         let open = egui::Popup::is_id_open(ui.ctx(), id.with("popup"));
         let tokens = super::craft_theme::current(ui.ctx());
         let style = super::craft_theme::icon_button_style(&tokens, true);

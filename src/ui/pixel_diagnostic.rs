@@ -24,7 +24,7 @@ pub(crate) fn draw(
     capabilities: &HardwareCapabilities,
     count: u16,
 ) {
-    let id = ui.id().with("pixel-diagnostic");
+    let id = ui.scope_id().with("pixel-diagnostic");
     let mut state = ui
         .data(|d| d.get_temp::<ProbeState>(id))
         .unwrap_or_default();

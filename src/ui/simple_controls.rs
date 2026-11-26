@@ -338,7 +338,7 @@ mod tests {
             |ui| {
                 super::super::status_bar::draw(app, ui);
                 egui::CentralPanel::default()
-                    .show_inside(ui, |ui| super::super::controls::draw(app, ui));
+                    .show(ui, |ui| super::super::controls::draw(app, ui));
             },
         );
         output.textures_delta.clear();

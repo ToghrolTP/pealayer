@@ -143,7 +143,7 @@ pub fn inline_caption_edit(ui: &mut egui::Ui, id: egui::Id, text: &mut String,
         ui.spacing_mut().interact_size.y = size.y;
     }
     let response = ui.add_sized(size, singleline_text_edit(ui, text).min_size(egui::vec2(0.0, size.y)).id(id).font(font)
-        .text_color(ui.visuals().strong_text_color()).horizontal_align(alignment)
+        .text_color(ui.visuals().strong_text_color()).align(egui::Align2([alignment, egui::Align::Center]))
         .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 0))).char_limit(64));
     if size.y < prev_interact.y {
         ui.spacing_mut().interact_size = prev_interact;
@@ -876,7 +876,7 @@ mod tests {
                             numeric_slider_wheel(ui, &response, value, 0.0..=130.0, crate::config::NumericInputSteps::for_step(1.0));
                             ui.add_space(600.0);
                         });
-                        offset = result.state.offset().y;
+                        offset = result.state.clamped_offset().y;
                     });
                     output.textures_delta.clear();
                     slider_rect
@@ -1270,7 +1270,7 @@ pub fn scroll_column_at(
             ui.set_width(width);
             body(ui);
         });
-    }).state.offset().y
+    }).state.clamped_offset().y
 }
 
 /// A vertically content-sized scroll column for compact dialogs. It behaves

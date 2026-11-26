@@ -546,7 +546,7 @@ impl eframe::App for StandalonePreferencesApp {
             }
         }
         let outcome = egui::CentralPanel::default()
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 egui::Frame::new()
                     .inner_margin(egui::Margin {
                         left: 12,
@@ -855,7 +855,7 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
     egui::Panel::bottom("preferences_footer")
         .resizable(false)
         .show_separator_line(true)
-        .show_inside(ui, |ui| {
+        .show(ui, |ui| {
             ui.add_space(9.0);
             crate::ui::dialog::action_bar(
                 ui,
@@ -902,7 +902,7 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
             );
         });
 
-    egui::CentralPanel::default().show_inside(ui, |ui| {
+    egui::CentralPanel::default().show(ui, |ui| {
         let sections = preference_sections();
         let narrow = ui.available_width() < 560.0;
         let rail_width = sections.iter().map(|section| {
@@ -1241,7 +1241,7 @@ fn render_contract_control(
                     .truncate()
                     .selected_text(selected_text)
                     .show_ui(ui, |ui| {
-                        let search_id = ui.id().with(("font-search", control.key));
+                        let search_id = ui.scope_id().with(("font-search", control.key));
                         let mut search = ui.data_mut(|d| d.get_temp::<String>(search_id).unwrap_or_default());
                         if font_picker {
                             ui.add(egui::TextEdit::singleline(&mut search).hint_text(tr("Search…")).desired_width(control_width));
@@ -1271,7 +1271,7 @@ fn render_contract_control(
                     paint_palette_preview(ui, popup.response.rect, selected);
                 }
                 if audio_output {
-                    let id = ui.id().with(("audio-output-open", control.key));
+                    let id = ui.scope_id().with(("audio-output-open", control.key));
                     let was_open = ui.data_mut(|d| d.get_temp::<bool>(id).unwrap_or(false));
                     if popup.inner.is_some() && !was_open {
                         if let Some(client) = crate::peer::client() {
@@ -1432,7 +1432,7 @@ fn render_contract_control(
                                     .add_sized(
                                         [field_width, crate::ui::control_density::height(ui)],
                                         crate::ui::dialog::singleline_text_edit(ui, &mut item.from)
-                                            .horizontal_align(from_align)
+                                            .align(egui::Align2([from_align, egui::Align::Center]))
                                             .hint_text(tr("Source text")),
                                     )
                                     .changed();
@@ -1441,7 +1441,7 @@ fn render_contract_control(
                                     .add_sized(
                                         [field_width, crate::ui::control_density::height(ui)],
                                         crate::ui::dialog::singleline_text_edit(ui, &mut item.to)
-                                            .horizontal_align(to_align)
+                                            .align(egui::Align2([to_align, egui::Align::Center]))
                                             .hint_text(tr("Replacement")),
                                     )
                                     .changed();
@@ -1533,7 +1533,7 @@ fn render_contract_control(
                 }
             });
             if player_executable {
-                if refresh_resolution { ui.data_mut(|data| data.remove::<String>(ui.id().with("resolved-player-request"))); }
+                if refresh_resolution { ui.data_mut(|data| data.remove::<String>(ui.scope_id().with("resolved-player-request"))); }
                 resolved_player_hint(ui, &text, resolving_allowed);
             }
             if edited {
@@ -1567,7 +1567,7 @@ fn render_contract_control(
                         &mut text, control_width, control.placeholder.unwrap_or_default(), rtl_ui)
                 } else { ui.add(
                     crate::ui::dialog::singleline_text_edit(ui, &mut text)
-                        .horizontal_align(text_align)
+                        .align(egui::Align2([text_align, egui::Align::Center]))
                         .desired_width(control_width)
                         .hint_text(control.placeholder.unwrap_or_default()),
                 ) };
@@ -1592,8 +1592,8 @@ fn preference_text_value(key: &str, text: &str, executable: bool) -> serde_json:
 }
 
 fn resolved_player_hint(ui: &mut egui::Ui, input: &str, resolving_allowed: bool) {
-    let request_id = ui.id().with("resolved-player-request");
-    let result_id = ui.id().with("resolved-player-result");
+    let request_id = ui.scope_id().with("resolved-player-request");
+    let result_id = ui.scope_id().with("resolved-player-result");
     let previous = ui.data(|data| data.get_temp::<String>(request_id));
     // Resolve once after an edit settles. Never probe PATH or a remote server
     // on each Preferences animation frame; results are scoped to this draft.
